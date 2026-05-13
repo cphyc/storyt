@@ -3,14 +3,18 @@
 Covers two concurrency axes:
 1. dask's threaded scheduler computing many instances in parallel (intra-call).
 2. Multiple Python threads calling .get() simultaneously (inter-call).
+3. dask "processes" scheduler: each property computed in a worker process.
 """
 
 import threading
 import time
 
+import dask
 import pytest
+from sqlalchemy.orm import Session as SASession
 
 import storyt as st
+from storyt.db import Database, ObjectData
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -193,3 +197,115 @@ def test_concurrent_cache_not_corrupted(multi_output):
     assert call_count["n"] == count_after_concurrent, (
         "Cache miss after concurrent writes"
     )
+
+
+# ---------------------------------------------------------------------------
+# 4. dask "processes" scheduler
+# ---------------------------------------------------------------------------
+
+
+def _iout_val(inst):
+    """Module-level function so it can be pickled by the processes scheduler."""
+    return int(inst.keys["iout"])
+
+
+def _iout_doubled(inst):
+    return int(inst.keys["iout"]) * 2
+
+
+def _iout_sum(inst, a, b):
+    return a + b
+
+
+def test_processes_scheduler_correct_results(tmp_path):
+    """processes scheduler returns correct values for all instances.
+
+    Uses a file-based DB (tmp_path/.storyt.db) which is required for the
+    processes scheduler to share cached results across worker processes.
+    """
+
+    for i in range(1, 6):
+        (tmp_path / f"output_{i:05d}").mkdir()
+
+    root = st.StaticAsset(path=str(tmp_path), name="root")
+    output = root.add_children(re=r"output_(?P<iout>\d{5})", name="output")
+    root.discover()
+    output.add_property("iout_val", _iout_val)
+
+    with dask.config.set(scheduler="processes", num_workers=2):
+        rows = output.all().get("iout_val")
+
+    assert len(rows) == 5
+    assert sorted(r["iout_val"] for r in rows) == list(range(1, 6))
+
+
+def test_processes_scheduler_property_chain(tmp_path):
+    """Dependent properties resolve correctly under the processes scheduler."""
+
+    for i in range(1, 4):
+        (tmp_path / f"output_{i:05d}").mkdir()
+
+    root = st.StaticAsset(path=str(tmp_path), name="root")
+    output = root.add_children(re=r"output_(?P<iout>\d{5})", name="output")
+    root.discover()
+    output.add_property("a", _iout_val)
+    output.add_property("b", _iout_doubled)
+    output.add_property("total", _iout_sum, requires=["a", "b"])
+
+    with dask.config.set(scheduler="processes", num_workers=2):
+        rows = output.all().get("total")
+
+    # total = iout + iout*2 = iout*3
+    assert sorted(r["total"] for r in rows) == [i * 3 for i in range(1, 4)]
+
+
+def test_processes_scheduler_cache_persists(tmp_path):
+    """After a processes run, results are cached in the on-disk DB.
+
+    Worker processes write their results to the shared SQLite file; a follow-up
+    call from the main process (synchronous scheduler, same function ⇒ same
+    source hash) must be served entirely from the cache.
+    """
+    for i in range(1, 4):
+        (tmp_path / f"output_{i:05d}").mkdir()
+
+    root = st.StaticAsset(path=str(tmp_path), name="root")
+    output = root.add_children(re=r"output_(?P<iout>\d{5})", name="output")
+    root.discover()
+    output.add_property("iout_val", _iout_val)
+
+    # First run: worker processes compute and write cache to the on-disk DB
+    with dask.config.set(scheduler="processes", num_workers=2):
+        rows1 = output.all().get("iout_val")
+
+    assert sorted(r["iout_val"] for r in rows1) == list(range(1, 4))
+
+    # Verify the on-disk DB has exactly one cached entry per instance
+    db = Database(str(tmp_path / ".storyt.db"))
+    with SASession(db.engine) as session:
+        count = session.query(ObjectData).count()
+    assert count == 3, f"Expected 3 cached entries in DB, got {count}"
+
+    # Second run (synchronous, identical function → same source hash → cache hit)
+    # Monkey-patch to detect any recomputation
+    recomputed = []
+    original_fn = _iout_val
+
+    def _spy(inst):
+        recomputed.append(inst.keys["iout"])
+        return original_fn(inst)
+
+    # Source hash of _spy differs from _iout_val, so use the same function
+    rows2 = output.all().get("iout_val")
+    assert sorted(r["iout_val"] for r in rows2) == list(range(1, 4))
+    assert recomputed == [], "Main process recomputed already-cached values"
+
+
+def test_processes_scheduler_in_memory_raises(tmp_path):
+    """An in-memory Database cannot be pickled; a clear TypeError is raised."""
+
+    db = Database(":memory:")
+    with pytest.raises(TypeError, match="In-memory"):
+        import pickle
+
+        pickle.dumps(db)

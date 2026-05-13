@@ -168,6 +168,21 @@ class Database:
         self.conn = SQLConnectionWrapper(raw_conn)
         Base.metadata.create_all(self.engine)
 
+    # ------------------------------------------------------------------
+    # Pickle support (required for dask "processes" scheduler)
+    # ------------------------------------------------------------------
+
+    def __getstate__(self) -> dict:
+        if self.path == ":memory:":
+            raise TypeError(
+                "In-memory databases cannot be pickled for multiprocessing. "
+                "Use a file-based database (i.e. pass path= to StaticAsset)."
+            )
+        return {"path": self.path}
+
+    def __setstate__(self, state: dict) -> None:
+        self.__init__(state["path"])
+
     def _session(self) -> Session:
         return Session(self.engine)
 
