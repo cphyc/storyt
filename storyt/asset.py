@@ -611,30 +611,40 @@ class StaticAsset:
         except (NotADirectoryError, PermissionError):
             logger.warning("%sscan[%s] cannot list %s", indent, self.name, parent_path)
             return
+        # Preload all DB instances for this asset and parent
+        db_rows = self._db.get_instances(asset_id, {}) if not _force else []
+        db_index = {(row["parent_id"], row["path"]): row for row in db_rows}
         for entry in entries:
-            # Only scan if force or file is new/modified
             mtime = int(entry.stat().st_mtime) if entry.exists() else int(time.time())
-            skip = False
-            if not _force:
-                rows = self._db.get_instances(asset_id, {})
-                for row in rows:
-                    if row["parent_id"] == parent_db_id and row["path"] == str(entry):
-                        dbts = row.get("timestamp")
-                        if dbts is not None and dbts >= mtime:
-                            skip = True
-                            break
-            if skip:
-                logger.debug(
-                    "%sscan[%s] skipping unchanged %s", indent, self.name, entry
-                )
-                continue
+
+            db_row = db_index.get((parent_db_id, str(entry))) if not _force else None
+            if not _force and db_row is not None:
+                dbts = db_row.get("timestamp")
+                if dbts is not None and dbts >= mtime:
+                    # If this is a directory and we have more components, skip recursing
+                    if len(components) > 1 and entry.is_dir():
+                        logger.debug(
+                            "%sscan[%s] skipping unchanged subtree %s",
+                            indent,
+                            self.name,
+                            entry,
+                        )
+                        scanned += 1
+                        continue
+                    # If this is a file/leaf, skip registration
+                    if len(components) == 1:
+                        logger.debug(
+                            "%sscan[%s] skipping unchanged %s", indent, self.name, entry
+                        )
+                        scanned += 1
+                        continue
             # Match pattern
             is_match, extracted = _match_path_component(components[0], entry.name)
             if not is_match:
                 continue
             next_keys = dict(extracted)
             if len(components) > 1 and entry.is_dir():
-                # Recurse
+                # Recurse only if not skipped above
                 sub_pattern = "/".join(components[1:])
                 self._scan_for_pattern(
                     entry,
