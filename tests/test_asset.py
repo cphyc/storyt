@@ -267,45 +267,51 @@ def test_template_missing_ancestor_is_silently_skipped(tmp_path):
 
 
 def test_discover_persistence_and_timestamps(tmp_path):
-    # Setup: create root and children
-    (tmp_path / "sim1").mkdir()
-    (tmp_path / "sim2").mkdir()
+    sim_names = ["sim1", "sim2"]
+
+    # Arrange: create directories and discover once.
+    for name in sim_names:
+        (tmp_path / name).mkdir()
+
     root = st.StaticAsset(path=str(tmp_path), name="root")
-    sim = root.add_children(path=["sim1", "sim2"], name="sim")
-    # First discover
+    sim_asset = root.add_children(path=sim_names, name="sim")
     root.discover()
-    instances1 = sim.instances()
-    assert len(instances1) == 2
-    # Save mtimes
-    mtimes = {i.path.name: i.path.stat().st_mtime for i in instances1}
-    # Close and reload asset tree (simulate new session)
-    root2 = st.StaticAsset(path=str(tmp_path), name="root")
-    sim2 = root2.add_children(path=["sim1", "sim2"], name="sim")
-    # Discover again (should not rescan if unchanged)
-    _t0 = time.time()
-    root2.discover()
-    instances2 = sim2.instances()
-    assert len(instances2) == 2
-    # mtimes should be unchanged
-    for i in instances2:
-        assert abs(i.path.stat().st_mtime - mtimes[i.path.name]) < 1
-    # Touch one dir to update mtime
+
+    initial_instances = sim_asset.instances()
+    assert len(initial_instances) == 2
+    initial_mtimes = {
+        inst.path.name: inst.path.stat().st_mtime for inst in initial_instances
+    }
+
+    # Simulate a fresh process by rebuilding the asset tree.
+    reloaded_root = st.StaticAsset(path=str(tmp_path), name="root")
+    reloaded_sim_asset = reloaded_root.add_children(path=sim_names, name="sim")
+
+    # Unchanged filesystem: discover should preserve mtimes.
+    reloaded_root.discover()
+    unchanged_instances = reloaded_sim_asset.instances()
+    assert len(unchanged_instances) == 2
+    for inst in unchanged_instances:
+        assert abs(inst.path.stat().st_mtime - initial_mtimes[inst.path.name]) < 1
+
+    # Update one directory mtime and discover again.
     time.sleep(1.1)
-    (tmp_path / "sim1").touch()
-    new_mtime = (tmp_path / "sim1").stat().st_mtime
-    assert new_mtime > mtimes["sim1"]
-    # Discover again (should rescan sim1 only)
-    root2.discover()
-    instances3 = sim2.instances()
-    assert len(instances3) == 2
-    # sim1 instance should have updated mtime
-    sim1_inst = [i for i in instances3 if i.path.name == "sim1"][0]
-    assert abs(sim1_inst.path.stat().st_mtime - new_mtime) < 1
-    # Discover with force=True (should rescan all)
+    updated_dir = tmp_path / "sim1"
+    updated_dir.touch()
+    updated_mtime = updated_dir.stat().st_mtime
+    assert updated_mtime > initial_mtimes["sim1"]
+
+    reloaded_root.discover()
+    after_touch_instances = reloaded_sim_asset.instances()
+    assert len(after_touch_instances) == 2
+
+    touched_instance = next(
+        inst for inst in after_touch_instances if inst.path.name == "sim1"
+    )
+    assert abs(touched_instance.path.stat().st_mtime - updated_mtime) < 1
+
+    # force=True should still discover both instances.
     time.sleep(1.1)
-    root2.discover(force=True)
-    instances4 = sim2.instances()
-    assert len(instances4) == 2
-    # All mtimes should be current
-    for i in instances4:
-        assert abs(i.path.stat().st_mtime - i.path.stat().st_mtime) < 1
+    reloaded_root.discover(force=True)
+    forced_instances = reloaded_sim_asset.instances()
+    assert len(forced_instances) == 2
