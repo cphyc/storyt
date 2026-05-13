@@ -354,6 +354,13 @@ class StaticAsset:
     ):
         """Register a computed property (can be used as a decorator)."""
         req = self._normalize_requires(requires)
+        prop_requires: list[str] = []
+        reader_requires: list[str] = []
+        for dep in req:
+            if dep in self._readers:
+                reader_requires.append(dep)
+            else:
+                prop_requires.append(dep)
         if reader is not None and not self._has_reader(reader):
             raise ValueError(
                 f"Unknown reader '{reader}' for property '{name}' on asset '{self.name}'"
@@ -366,8 +373,9 @@ class StaticAsset:
                     name,
                     f,
                     serializer=serializer,
-                    requires=req,
+                    requires=prop_requires,
                     reader=reader,
+                    reader_requires=reader_requires,
                 )
                 return f
 
@@ -376,8 +384,9 @@ class StaticAsset:
             name,
             fn,
             serializer=serializer,
-            requires=req,
+            requires=prop_requires,
             reader=reader,
+            reader_requires=reader_requires,
         )
 
     def all(self) -> Query:

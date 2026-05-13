@@ -212,3 +212,38 @@ def test_get_after_chain(simple_hierarchy):
     assert len(rows) == 3
     labels = {r["label"] for r in rows}
     assert labels == {"00001", "00002"}
+
+
+def test_property_requires_reader_name_does_not_break_query_get(tmp_path):
+    """MRE: requires='sp' should preload reader, not be treated as property dep."""
+    (tmp_path / "sim1" / "output_00001").mkdir(parents=True)
+
+    root = st.StaticAsset(path=str(tmp_path), name="root")
+    sim = root.add_children(path=["sim1"], name="sim")
+    output = sim.add_children(re=r"output_(?P<iout>\d{5})", name="output")
+    _cutout = output.add_children(path=".", name="cutout")
+
+    class FakeDS:
+        right_edge = 2.0
+        left_edge = 0.0
+        domain_center = 1.0
+
+        def sphere(self, _center, _radius):
+            return {("star", "particle_mass"): [1.0, 2.0, 3.0]}
+
+    output.register_reader(lambda inst: FakeDS(), name="ds")
+
+    @output.register_reader(name="sp", requires="ds")
+    def _sp(out):
+        ds = out.reader["ds"]
+        return ds.sphere(ds.domain_center, (ds.right_edge - ds.left_edge) / 2)
+
+    @output.add_property(name="stellar_mass", requires="sp")
+    def _stellar_mass(out):
+        sp = out.reader["sp"]
+        return sum(sp["star", "particle_mass"])
+
+    root.discover()
+    rows = output.all().get("stellar_mass")
+    assert len(rows) == 1
+    assert rows[0]["stellar_mass"] == 6.0
