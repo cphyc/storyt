@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from . import serializers
+
 if TYPE_CHECKING:
     from .asset import StaticAsset
 
@@ -95,16 +97,12 @@ class AssetInstance:
 
         cached = db.get_cached_property(prop_id, inst_id, source_hash)
         if cached is not None:
-            from . import serializers
-
             return serializers.deserialize(prop.serializer, cached)
 
         # Resolve dependencies first (recursive, each dep is also cached)
         dep_values = tuple(getattr(self, dep) for dep in prop.requires)
 
         value = prop.compute(self, dep_values)
-
-        from . import serializers
 
         data = serializers.serialize(prop.serializer, value)
         db.set_cached_property(prop_id, inst_id, data, source_hash)

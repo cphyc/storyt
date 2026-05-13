@@ -13,6 +13,7 @@ from sqlalchemy import (
     create_engine,
     text,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Session, relationship
 
 
@@ -176,7 +177,6 @@ class Database:
     def register_asset_type(
         self, name: str, pattern: str | None, is_dynamic: bool, hash_: str
     ) -> int:
-        from sqlalchemy.exc import IntegrityError
 
         session = self._session()
         try:
@@ -203,7 +203,6 @@ class Database:
             session.close()
 
     def register_hierarchy(self, parent_id: int, child_id: int):
-        from sqlalchemy.exc import IntegrityError
 
         session = self._session()
         try:
@@ -231,7 +230,6 @@ class Database:
         keys: dict,
         parent_id: int | None,
     ) -> int:
-        from sqlalchemy.exc import IntegrityError
 
         session = self._session()
         try:
@@ -270,7 +268,6 @@ class Database:
     def register_property(
         self, obj_id: int, name: str, source_hash: str, serializer: str = "pickle"
     ) -> int:
-        from sqlalchemy.exc import IntegrityError
 
         session = self._session()
         try:
@@ -328,7 +325,6 @@ class Database:
     def set_cached_property(
         self, property_id: int, instance_id: int, data: bytes, hash_: str
     ):
-        from sqlalchemy.exc import IntegrityError
 
         session = self._session()
         try:
@@ -368,7 +364,6 @@ class Database:
             session.close()
 
     def register_property_dep(self, property_id: int, depends_on_id: int):
-        from sqlalchemy.exc import IntegrityError
 
         session = self._session()
         try:
@@ -504,7 +499,6 @@ class Database:
 
     def register_binding(self, members: list[tuple]) -> int:
         """Register a binding. members is [(object_store_id, key_name), ...]."""
-        from sqlalchemy.exc import IntegrityError
 
         sig = hashlib.sha256(
             json.dumps(sorted(members), sort_keys=True).encode()

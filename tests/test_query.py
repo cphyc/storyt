@@ -3,6 +3,7 @@
 import pytest
 
 import storyt as st
+from storyt.query import Query
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -54,7 +55,6 @@ def test_all_returns_query(tmp_path):
     root.discover()
 
     q = output.all()
-    from storyt.query import Query
 
     assert isinstance(q, Query)
     assert len(q._instances) == 1

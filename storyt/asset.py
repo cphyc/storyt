@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from .query import Query
-
 from .db import Database
+from .instance import AssetInstance
 from .property_ import Property
+from .query import Query
 
 
 class StaticAsset:
@@ -142,8 +142,6 @@ class StaticAsset:
 
     def all(self) -> Query:
         """Return a Query over all instances of this asset."""
-        from .query import Query
-
         return Query(self, self.instances())
 
     def __getattr__(self, name: str) -> StaticAsset:
@@ -194,9 +192,7 @@ class StaticAsset:
         if _parent_instances is None:
             self._collect_and_register_bindings(set())
 
-    def _create_instances_for_parent(
-        self, parent_path: Path | None, parent_db_id: int
-    ):
+    def _create_instances_for_parent(self, parent_path: Path | None, parent_db_id: int):
         if self._is_dynamic:
             if self._parent and self._parent._reader and parent_path:
                 try:
@@ -279,8 +275,6 @@ class StaticAsset:
     # ------------------------------------------------------------------
 
     def instances(self, **key_filters) -> list:
-        from .instance import AssetInstance
-
         if self._db_id is None:
             return []
         rows = self._db.get_instances(self._db_id, key_filters)

@@ -8,11 +8,13 @@ from typing import TYPE_CHECKING
 
 from dask import compute as dask_compute, delayed
 
+from . import serializers
+from .instance import AssetInstance, _search_asset
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from .asset import StaticAsset
-    from .instance import AssetInstance
 
 
 # ---------------------------------------------------------------------------
@@ -50,8 +52,6 @@ def _topo_sort_props(asset: StaticAsset, requested: tuple[str, ...]) -> list[str
 
 
 def _make_instance(asset: StaticAsset, row: dict) -> AssetInstance:
-    from .instance import AssetInstance
-
     keys = json.loads(row["keys"]) if isinstance(row["keys"], str) else row["keys"]
     path = Path(row["path"]) if row["path"] else None
     return AssetInstance(asset, row["id"], path, keys, row.get("parent_id"))
@@ -59,8 +59,6 @@ def _make_instance(asset: StaticAsset, row: dict) -> AssetInstance:
 
 def _compute_prop_cached(instance: AssetInstance, prop, dep_values: tuple = ()):
     """Compute one property (with cache check/store). Safe to call from threads."""
-    from . import serializers
-
     source_hash = prop.source_hash()
     db = instance.asset._db
     prop_id = db.register_property(
@@ -110,7 +108,6 @@ class Query:
         root = self._asset
         while root._parent is not None:
             root = root._parent
-        from .instance import _search_asset
 
         target = _search_asset(root, name)
         if target is None or target._db_id is None:
