@@ -586,13 +586,15 @@ class StaticAsset:
                         parent_db_id,
                         created,
                     )
-                except Exception:
+                except Exception as e:
                     logger.warning(
                         "%sdynamic[%s] parent_id=%d failed",
                         indent,
                         self.name,
                         parent_db_id,
                     )
+                    for line in str(e).splitlines():
+                        logger.error("%s>  %s", indent, line)
 
         elif self._re_pattern is not None:
             if _has_template(self._re_pattern):
@@ -693,8 +695,10 @@ class StaticAsset:
         matched = 0
         try:
             entries = list(parent_path.iterdir())
-        except (NotADirectoryError, PermissionError):
+        except (NotADirectoryError, PermissionError) as e:
             logger.warning("%sscan[%s] cannot list %s", indent, self.name, parent_path)
+            for line in str(e).splitlines():
+                logger.error("%s>  %s", indent, line)
             return
         # Preload all DB instances for this asset and parent
         db_rows = self._db.get_instances(asset_id, {}) if not _force else []
