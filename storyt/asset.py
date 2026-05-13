@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 from .db import Database
 from .instance import AssetInstance
+from .logging import logger
 from .property_ import Property
 from .query import Query
 
@@ -252,16 +253,29 @@ class StaticAsset:
         the corresponding parent instance.  This context is used to resolve
         ``${name.path}`` placeholders in ``re=`` patterns.
         """
-        self._ensure_registered()
+        depth = 0 if _parent_instances is None else self._depth()
+        indent = "  " * depth
+        asset_id = self._ensure_registered()
+
+        logger.debug("%sdiscover[%s] start", indent, self.name)
+        logger.debug("%sdiscover[%s] registered", indent, self.name)
 
         if self._parent is not None and self._parent._db_id is not None:
-            self._db.register_hierarchy(self._parent._db_id, self._db_id)
+            self._db.register_hierarchy(self._parent._db_id, asset_id)
+            logger.debug("%sdiscover[%s] hierarchy linked", indent, self.name)
 
         if _parent_instances is None:
             # Root asset: create a single instance at the root path
             root_path = self._get_root_path()
-            self._db.register_instance(self._db_id, str(root_path), {}, None)
-            my_instances = self._db.get_instances(self._db_id, {})
+            self._db.register_instance(asset_id, str(root_path), {}, None)
+            logger.debug("%sdiscover[%s] root instance registered", indent, self.name)
+            my_instances = self._db.get_instances(asset_id, {})
+            logger.debug(
+                "%sdiscover[%s] instances loaded=%d",
+                indent,
+                self.name,
+                len(my_instances),
+            )
             # Seed ancestry: root maps to itself
             my_contexts: list[dict[str, dict]] = [
                 {self.name: inst} for inst in my_instances
@@ -269,6 +283,11 @@ class StaticAsset:
         elif not _parent_instances:
             my_instances = []
             my_contexts = []
+            logger.debug(
+                "%sdiscover[%s] skipped (no parent instances)",
+                indent,
+                self.name,
+            )
         else:
             if _ancestry_contexts is None:
                 _ancestry_contexts = [{} for _ in _parent_instances]
@@ -279,10 +298,25 @@ class StaticAsset:
                 parent_path = Path(parent_inst["path"]) if parent_inst["path"] else None
                 parent_db_id = parent_inst["id"]
                 self._create_instances_for_parent(
-                    parent_path, parent_db_id, ancestry_ctx
+                    parent_path,
+                    parent_db_id,
+                    ancestry_ctx,
+                    _depth=depth + 1,
                 )
+            logger.debug(
+                "%sdiscover[%s] parent scans=%d",
+                indent,
+                self.name,
+                len(_parent_instances),
+            )
 
-            all_instances = self._db.get_instances(self._db_id, {})
+            all_instances = self._db.get_instances(asset_id, {})
+            logger.debug(
+                "%sdiscover[%s] instances loaded=%d",
+                indent,
+                self.name,
+                len(all_instances),
+            )
             # Map each parent instance id → its ancestry context so we can
             # propagate the chain to grandchildren.
             parent_id_to_ctx: dict[int, dict[str, dict]] = {
@@ -290,40 +324,73 @@ class StaticAsset:
                 for inst, ctx in zip(_parent_instances, _ancestry_contexts, strict=True)
             }
             my_instances = all_instances
-            my_contexts = [
-                {**parent_id_to_ctx.get(inst.get("parent_id"), {}), self.name: inst}
-                for inst in all_instances
-            ]
+            my_contexts = []
+            for inst in all_instances:
+                parent_id = inst.get("parent_id")
+                inherited = (
+                    parent_id_to_ctx.get(parent_id, {})
+                    if isinstance(parent_id, int)
+                    else {}
+                )
+                my_contexts.append({**inherited, self.name: inst})
 
         # Recurse into children before registering bindings so that all
         # assets have been registered in object_store by the time we need
         # their IDs for object_binding_member.
         for child in self._children:
             child.discover(
-                _parent_instances=my_instances, _ancestry_contexts=my_contexts
+                _parent_instances=my_instances,
+                _ancestry_contexts=my_contexts,
             )
 
         # Register bindings only at the root level (after full tree traversal)
         if _parent_instances is None:
             self._collect_and_register_bindings(set())
+            logger.debug("%sdiscover[%s] bindings collected", indent, self.name)
+
+        logger.debug("%sdiscover[%s] done", indent, self.name)
+
+    def _depth(self) -> int:
+        depth = 0
+        node = self._parent
+        while node is not None:
+            depth += 1
+            node = node._parent
+        return depth
 
     def _create_instances_for_parent(
         self,
         parent_path: Path | None,
         parent_db_id: int,
         ancestry_context: dict[str, dict] | None = None,
+        *,
+        _depth: int = 0,
     ):
+        indent = "  " * _depth
+        asset_id = self._ensure_registered()
         if self._is_dynamic:
             if self._parent and self._parent._reader and parent_path:
+                created = 0
                 try:
                     data = self._parent._reader(parent_path)
                     for key_val, _item in self._generator(data):  # type: ignore[misc]
                         keys = {self._generator_key: str(key_val)}  # type: ignore[index]
-                        self._db.register_instance(
-                            self._db_id, None, keys, parent_db_id
-                        )
+                        self._db.register_instance(asset_id, None, keys, parent_db_id)
+                        created += 1
+                    logger.debug(
+                        "%sdynamic[%s] parent_id=%d created=%d",
+                        indent,
+                        self.name,
+                        parent_db_id,
+                        created,
+                    )
                 except Exception:
-                    pass
+                    logger.warning(
+                        "%sdynamic[%s] parent_id=%d failed",
+                        indent,
+                        self.name,
+                        parent_db_id,
+                    )
 
         elif self._re_pattern is not None:
             if _has_template(self._re_pattern):
@@ -333,11 +400,30 @@ class StaticAsset:
                         self._re_pattern, ancestry_context or {}
                     )
                     scan_base, pattern = _split_absolute_pattern(resolved)
+                    logger.debug("%sregex[%s] template resolved", indent, self.name)
                 except (ValueError, AttributeError):
+                    logger.warning(
+                        "%sregex[%s] template resolution failed for parent_id=%d",
+                        indent,
+                        self.name,
+                        parent_db_id,
+                    )
                     return
                 if scan_base is not None:
                     if scan_base.exists() and scan_base.is_dir():
-                        self._scan_for_pattern(scan_base, parent_db_id, pattern)
+                        self._scan_for_pattern(
+                            scan_base,
+                            parent_db_id,
+                            pattern,
+                            _depth=_depth,
+                        )
+                    else:
+                        logger.warning(
+                            "%sregex[%s] scan base missing: %s",
+                            indent,
+                            self.name,
+                            scan_base,
+                        )
                 else:
                     # Resolved to a relative pattern — fall back to parent path.
                     if (
@@ -345,33 +431,57 @@ class StaticAsset:
                         and parent_path.exists()
                         and parent_path.is_dir()
                     ):
-                        self._scan_for_pattern(parent_path, parent_db_id, pattern)
+                        self._scan_for_pattern(
+                            parent_path,
+                            parent_db_id,
+                            pattern,
+                            _depth=_depth,
+                        )
             else:
                 if (
                     parent_path is not None
                     and parent_path.exists()
                     and parent_path.is_dir()
                 ):
-                    self._scan_for_pattern(parent_path, parent_db_id)
+                    self._scan_for_pattern(
+                        parent_path,
+                        parent_db_id,
+                        _depth=_depth,
+                    )
 
         elif self._fixed_paths is not None:
             base = parent_path if parent_path is not None else self._get_root_path()
             for rel in self._fixed_paths:
                 full_path = base / rel
-                self._db.register_instance(
-                    self._db_id, str(full_path), {}, parent_db_id
-                )
+                self._db.register_instance(asset_id, str(full_path), {}, parent_db_id)
+            logger.debug(
+                "%sfixed[%s] parent_id=%d created=%d",
+                indent,
+                self.name,
+                parent_db_id,
+                len(self._fixed_paths),
+            )
 
     def _scan_for_pattern(
-        self, parent_path: Path, parent_db_id: int, pattern: str | None = None
+        self,
+        parent_path: Path,
+        parent_db_id: int,
+        pattern: str | None = None,
+        *,
+        _depth: int = 0,
     ):
+        indent = "  " * _depth
+        asset_id = self._ensure_registered()
         pattern = pattern if pattern is not None else self._re_pattern
         assert pattern is not None
 
+        scanned = 0
+        matched = 0
         if "/" in pattern:
             # Pattern spans multiple path components — walk recursively
             try:
                 for entry in parent_path.rglob("*"):
+                    scanned += 1
                     try:
                         rel = str(entry.relative_to(parent_path))
                         m = re_module.fullmatch(pattern, rel)
@@ -380,23 +490,39 @@ class StaticAsset:
                                 k: v for k, v in m.groupdict().items() if v is not None
                             }
                             self._db.register_instance(
-                                self._db_id, str(entry), keys, parent_db_id
+                                asset_id, str(entry), keys, parent_db_id
                             )
+                            matched += 1
                     except ValueError:
                         pass
             except PermissionError:
-                pass
+                logger.warning(
+                    "%sscan[%s] permission denied: %s", indent, self.name, parent_path
+                )
         else:
             try:
                 for entry in parent_path.iterdir():
+                    scanned += 1
                     m = re_module.fullmatch(pattern, entry.name)
                     if m:
                         keys = {k: v for k, v in m.groupdict().items() if v is not None}
                         self._db.register_instance(
-                            self._db_id, str(entry), keys, parent_db_id
+                            asset_id, str(entry), keys, parent_db_id
                         )
+                        matched += 1
             except (NotADirectoryError, PermissionError):
-                pass
+                logger.warning(
+                    "%sscan[%s] cannot iterate: %s", indent, self.name, parent_path
+                )
+
+        logger.debug(
+            "%sscan[%s] parent_id=%d scanned=%d matched=%d",
+            indent,
+            self.name,
+            parent_db_id,
+            scanned,
+            matched,
+        )
 
     def _collect_and_register_bindings(self, registered: set):
         """Walk the tree, deduplicate, and register all pending bindings."""

@@ -53,6 +53,27 @@ for inst in output.instances(iout="00010"):
 | `asset.instances(**filters)` | Iterate instances (optionally filtered by key values). |
 | `inst.get(prop_name)` / `inst.prop_name` | Compute and cache a property value. |
 
+### Discover logging
+
+`discover()` now emits optional colored, timestamped debug logs for key steps
+(registration, scans, recursion, bindings).
+
+Enable via environment variable:
+
+```bash
+export STORYT_DISCOVER_LOG=1
+python your_script.py
+```
+
+Or configure once in Python:
+
+```python
+import storyt as st
+
+st.logger.setLevel("DEBUG")
+project.discover()
+```
+
 ---
 
 ## Web viewer
