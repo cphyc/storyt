@@ -472,6 +472,22 @@ class StaticAsset:
                 if _ancestry_contexts is None:
                     _ancestry_contexts = [{} for _ in _parent_instances]
 
+                existing_rows = (
+                    self._db.get_instances(asset_id, {}) if not force else []
+                )
+                by_parent_path: dict[tuple[int, str], int] = {}
+                by_parent_max_ts: dict[int, int] = {}
+                for row in existing_rows:
+                    parent_id = row.get("parent_id")
+                    ts = row.get("timestamp")
+                    path = row.get("path")
+                    if isinstance(parent_id, int) and isinstance(ts, int):
+                        prev_max = by_parent_max_ts.get(parent_id)
+                        if prev_max is None or ts > prev_max:
+                            by_parent_max_ts[parent_id] = ts
+                        if isinstance(path, str):
+                            by_parent_path[parent_id, path] = ts
+
                 for parent_inst, ancestry_ctx in zip(
                     _parent_instances, _ancestry_contexts, strict=True
                 ):
@@ -487,15 +503,16 @@ class StaticAsset:
                     # If not force, check DB timestamp
                     skip = False
                     if not force:
-                        rows = self._db.get_instances(asset_id, {})
-                        for row in rows:
-                            if row["parent_id"] == parent_db_id and row["path"] == str(
-                                parent_path
-                            ):
-                                dbts = row.get("timestamp")
-                                if dbts is not None and dbts >= mtime:
-                                    skip = True
-                                    break
+                        # For normal assets, compare by concrete child path.
+                        if parent_path is not None:
+                            dbts = by_parent_path.get((parent_db_id, str(parent_path)))
+                            if dbts is not None and dbts >= mtime:
+                                skip = True
+                        # For dynamic/pathless assets, compare max child ts by parent.
+                        if not skip and self._is_dynamic:
+                            parent_max_ts = by_parent_max_ts.get(parent_db_id)
+                            if parent_max_ts is not None and parent_max_ts >= mtime:
+                                skip = True
                     if skip:
                         logger.debug(
                             "%sdiscover[%s] skipping unchanged instance %s",

@@ -566,6 +566,7 @@ class Database:
                     "path": r.path,
                     "keys": r.keys,
                     "parent_id": r.parent_id,
+                    "timestamp": r.timestamp,
                 }
                 for r in rows
             ]
@@ -586,6 +587,7 @@ class Database:
                             "path": row.path,
                             "keys": row.keys,
                             "parent_id": row.parent_id,
+                            "timestamp": row.timestamp,
                         }
                     )
             return result
