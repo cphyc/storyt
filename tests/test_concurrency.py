@@ -37,7 +37,7 @@ def multi_output(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_dask_threaded_gives_correct_results(multi_output, tmp_path):
+def test_dask_threaded_gives_correct_results(multi_output):
     """dask computes all 10 instance properties and returns correct values.
 
     A small sleep forces overlap when the threaded scheduler is active.
