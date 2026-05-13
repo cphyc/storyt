@@ -50,5 +50,11 @@ MANIFEST
 *.log
 *.sqlite
 *.db
-.storit.db
+.storyt.db
+
+# Frontend
 tmp/
+
+# Frontend (Vite build artefacts)
+storyt/viewer/frontend/node_modules/
+storyt/viewer/frontend/dist/

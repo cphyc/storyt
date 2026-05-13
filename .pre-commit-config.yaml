@@ -19,3 +19,25 @@ repos:
       - id: ruff-format
       - id: ruff-check
         args: [--fix, --show-fixes]
+
+  # ── Frontend (TypeScript / TSX / CSS / HTML) ────────────────────────────────
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8
+    hooks:
+      - id: prettier
+        name: Prettier (frontend)
+        # Only run on frontend source files
+        files: ^storyt/viewer/frontend/src/
+        types: [file]
+        additional_dependencies:
+          - prettier@3
+
+  - repo: local
+    hooks:
+      - id: eslint-frontend
+        name: ESLint (frontend TypeScript/TSX)
+        language: system
+        # Run once (not per-file) so ESLint can apply project-wide rules
+        entry: bash -c 'cd storyt/viewer/frontend && npm run lint'
+        files: ^storyt/viewer/frontend/src/.*\.(ts|tsx)$
+        pass_filenames: false
