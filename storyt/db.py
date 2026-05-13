@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     create_engine,
+    func,
     text,
 )
 from sqlalchemy.exc import IntegrityError
@@ -590,6 +591,27 @@ class Database:
                             "timestamp": row.timestamp,
                         }
                     )
+            return result
+        finally:
+            self._release_session(session, owns_session)
+
+    def get_parent_max_timestamps(self, object_id: int) -> dict[int, int]:
+        """Return {parent_id: max(timestamp)} for instances of an asset."""
+        session, owns_session = self._acquire_session()
+        try:
+            rows = (
+                session.query(
+                    ObjectInstance.parent_id,
+                    func.max(ObjectInstance.timestamp),
+                )
+                .filter(ObjectInstance.object_id == object_id)
+                .group_by(ObjectInstance.parent_id)
+                .all()
+            )
+            result: dict[int, int] = {}
+            for parent_id, max_ts in rows:
+                if isinstance(parent_id, int) and isinstance(max_ts, int):
+                    result[parent_id] = max_ts
             return result
         finally:
             self._release_session(session, owns_session)

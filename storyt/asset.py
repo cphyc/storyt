@@ -472,21 +472,24 @@ class StaticAsset:
                 if _ancestry_contexts is None:
                     _ancestry_contexts = [{} for _ in _parent_instances]
 
-                existing_rows = (
-                    self._db.get_instances(asset_id, {}) if not force else []
-                )
                 by_parent_path: dict[tuple[int, str], int] = {}
                 by_parent_max_ts: dict[int, int] = {}
-                for row in existing_rows:
-                    parent_id = row.get("parent_id")
-                    ts = row.get("timestamp")
-                    path = row.get("path")
-                    if isinstance(parent_id, int) and isinstance(ts, int):
-                        prev_max = by_parent_max_ts.get(parent_id)
-                        if prev_max is None or ts > prev_max:
-                            by_parent_max_ts[parent_id] = ts
-                        if isinstance(path, str):
-                            by_parent_path[parent_id, path] = ts
+                if not force:
+                    if self._is_dynamic:
+                        # Dynamic children (path=None) only need max ts per parent.
+                        by_parent_max_ts = self._db.get_parent_max_timestamps(asset_id)
+                    else:
+                        existing_rows = self._db.get_instances(asset_id, {})
+                        for row in existing_rows:
+                            parent_id = row.get("parent_id")
+                            ts = row.get("timestamp")
+                            path = row.get("path")
+                            if isinstance(parent_id, int) and isinstance(ts, int):
+                                prev_max = by_parent_max_ts.get(parent_id)
+                                if prev_max is None or ts > prev_max:
+                                    by_parent_max_ts[parent_id] = ts
+                                if isinstance(path, str):
+                                    by_parent_path[parent_id, path] = ts
 
                 for parent_inst, ancestry_ctx in zip(
                     _parent_instances, _ancestry_contexts, strict=True
