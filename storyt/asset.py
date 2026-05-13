@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import re as re_module
@@ -60,7 +61,10 @@ def _resolve_template(pattern: str, ancestry: dict) -> str:
         for attr in attrs:
             if isinstance(val, dict):
                 raw = val.get(attr)
-                val = Path(str(raw)) if attr == "path" and raw is not None else raw
+                if attr == "path" and raw is not None:
+                    val = Path(str(raw))
+                else:
+                    val = raw
             else:
                 val = getattr(val, attr)
 
@@ -70,7 +74,7 @@ def _resolve_template(pattern: str, ancestry: dict) -> str:
 
 
 def _split_absolute_pattern(resolved: str) -> tuple[Path | None, str]:
-    """Split a resolved pattern that begins with ``/`` into *(base_dir, regex)*.
+    """Split an absolute pattern into a base directory and remainder.
 
     *base_dir* is the longest leading path whose every component is free of
     regex metacharacters.  *regex* is the remainder.
@@ -93,6 +97,76 @@ def _split_absolute_pattern(resolved: str) -> tuple[Path | None, str]:
     base_dir = Path("/") if len(static) == 1 else Path("/".join(static))
     remaining = "/".join(components[idx:])
     return base_dir, remaining
+
+
+def _looks_like_regex(pattern: str) -> bool:
+    return bool(re_module.search(r"\(\?P<|[()\\|^$+{}]", pattern))
+
+
+def _match_path_component(pattern: str, value: str) -> tuple[bool, dict[str, str]]:
+    """Match a single path component as regex when possible, otherwise glob."""
+    regex_is_plausible = not any(ch in pattern for ch in "*?[")
+    if regex_is_plausible or _looks_like_regex(pattern):
+        try:
+            match = re_module.fullmatch(pattern, value)
+        except re_module.error:
+            match = None
+        if match is not None:
+            groups = match.groupdict()
+            return True, {key: val for key, val in groups.items() if val is not None}
+    if any(ch in pattern for ch in "*?["):
+        return fnmatch.fnmatchcase(value, pattern), {}
+    return pattern == value, {}
+
+
+def _scan_component_path(
+    asset: StaticAsset,
+    current_path: Path,
+    components: list[str],
+    parent_db_id: int,
+    asset_id: int,
+    keys: dict[str, str] | None = None,
+) -> tuple[int, int]:
+    """Recursively scan one component at a time."""
+    if not components:
+        return 0, 0
+
+    head = components[0]
+    tail = components[1:]
+    scanned = 0
+    matched = 0
+
+    try:
+        entries = current_path.iterdir()
+    except (NotADirectoryError, PermissionError):
+        return 0, 0
+
+    for entry in entries:
+        scanned += 1
+        is_match, extracted = _match_path_component(head, entry.name)
+        if not is_match:
+            continue
+
+        next_keys = dict(keys or {})
+        next_keys.update(extracted)
+
+        if tail:
+            if entry.is_dir():
+                sub_scanned, sub_matched = _scan_component_path(
+                    asset,
+                    entry,
+                    tail,
+                    parent_db_id,
+                    asset_id,
+                    next_keys,
+                )
+                scanned += sub_scanned
+                matched += sub_matched
+        else:
+            asset._db.register_instance(asset_id, str(entry), next_keys, parent_db_id)
+            matched += 1
+
+    return scanned, matched
 
 
 class StaticAsset:
@@ -475,45 +549,14 @@ class StaticAsset:
         pattern = pattern if pattern is not None else self._re_pattern
         assert pattern is not None
 
-        scanned = 0
-        matched = 0
-        if "/" in pattern:
-            # Pattern spans multiple path components — walk recursively
-            try:
-                for entry in parent_path.rglob("*"):
-                    scanned += 1
-                    try:
-                        rel = str(entry.relative_to(parent_path))
-                        m = re_module.fullmatch(pattern, rel)
-                        if m:
-                            keys = {
-                                k: v for k, v in m.groupdict().items() if v is not None
-                            }
-                            self._db.register_instance(
-                                asset_id, str(entry), keys, parent_db_id
-                            )
-                            matched += 1
-                    except ValueError:
-                        pass
-            except PermissionError:
-                logger.warning(
-                    "%sscan[%s] permission denied: %s", indent, self.name, parent_path
-                )
-        else:
-            try:
-                for entry in parent_path.iterdir():
-                    scanned += 1
-                    m = re_module.fullmatch(pattern, entry.name)
-                    if m:
-                        keys = {k: v for k, v in m.groupdict().items() if v is not None}
-                        self._db.register_instance(
-                            asset_id, str(entry), keys, parent_db_id
-                        )
-                        matched += 1
-            except (NotADirectoryError, PermissionError):
-                logger.warning(
-                    "%sscan[%s] cannot iterate: %s", indent, self.name, parent_path
-                )
+        components = [component for component in pattern.split("/") if component]
+        scanned, matched = _scan_component_path(
+            self,
+            parent_path,
+            components,
+            parent_db_id,
+            asset_id,
+        )
 
         logger.debug(
             "%sscan[%s] parent_id=%d scanned=%d matched=%d",
