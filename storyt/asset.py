@@ -339,18 +339,9 @@ class StaticAsset:
             return decorator
         return decorator(fn)
 
-    def reader(self, fn: Callable) -> Callable:
-        """Backward-compatible single-reader API.
-
-        The callable receives a path in this legacy API.
-        """
-
-        def _legacy(inst):
-            return fn(inst.path)
-
-        self._readers["default"] = (_legacy, [])
-        self._default_reader_name = "default"
-        return fn
+    @property
+    def reader(self):
+        return self._readers
 
     def add_property(
         self,
