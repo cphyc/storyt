@@ -51,3 +51,4 @@ MANIFEST
 *.sqlite
 *.db
 .storit.db
+tmp/
