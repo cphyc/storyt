@@ -14,6 +14,85 @@ from .instance import AssetInstance
 from .property_ import Property
 from .query import Query
 
+# ---------------------------------------------------------------------------
+# Template helpers for ancestor-path substitution in re= patterns
+# ---------------------------------------------------------------------------
+
+# Matches ${name.attr1.attr2...} placeholders
+_TEMPLATE_RE = re_module.compile(r"\$\{([^}]+)\}")
+
+# Characters that cannot appear in a literal filesystem path component and
+# thus mark the start of the regex portion of a resolved pattern.
+_REGEX_SPECIAL = re_module.compile(r"[(*+?\[\\|^$]")
+
+
+def _has_template(pattern: str) -> bool:
+    """Return True if *pattern* contains ``${...}`` placeholders."""
+    return "${" in pattern
+
+
+def _resolve_template(pattern: str, ancestry: dict) -> str:
+    """Replace ``${name.attr...}`` placeholders using ancestor instance values.
+
+    *ancestry* maps asset names to their raw instance dicts
+    (``{id, path, keys, ...}``).  The expression inside ``${...}`` must start
+    with an asset name, followed by zero or more dot-separated
+    :class:`pathlib.Path` attribute names, e.g. ``${simulation.path.name}``.
+    """
+
+    def replacer(m: re_module.Match) -> str:
+        expr = m.group(1)
+        parts = expr.split(".")
+        asset_name = parts[0]
+        attrs = parts[1:]
+
+        inst = ancestry.get(asset_name)
+        if inst is None:
+            raise ValueError(
+                f"No ancestor asset named {asset_name!r} found in template "
+                f"(available: {list(ancestry)})"
+            )
+
+        # Walk the attribute chain starting from the instance dict.
+        # When we encounter a "path" key on a dict, wrap it in Path.
+        val: object = inst
+        for attr in attrs:
+            if isinstance(val, dict):
+                raw = val.get(attr)
+                val = Path(str(raw)) if attr == "path" and raw is not None else raw
+            else:
+                val = getattr(val, attr)
+
+        return str(val)
+
+    return _TEMPLATE_RE.sub(replacer, pattern)
+
+
+def _split_absolute_pattern(resolved: str) -> tuple[Path | None, str]:
+    """Split a resolved pattern that begins with ``/`` into *(base_dir, regex)*.
+
+    *base_dir* is the longest leading path whose every component is free of
+    regex metacharacters.  *regex* is the remainder.
+
+    Returns ``(None, resolved)`` when the pattern is not absolute.
+    """
+    if not resolved.startswith("/"):
+        return None, resolved
+
+    components = resolved.split("/")
+    # components[0] is '' (the empty string before the leading '/')
+    static: list[str] = [""]
+    idx = 1
+    while idx < len(components):
+        if _REGEX_SPECIAL.search(components[idx]):
+            break
+        static.append(components[idx])
+        idx += 1
+
+    base_dir = Path("/") if len(static) == 1 else Path("/".join(static))
+    remaining = "/".join(components[idx:])
+    return base_dir, remaining
+
 
 class StaticAsset:
     def __init__(
@@ -161,8 +240,18 @@ class StaticAsset:
     # Discovery
     # ------------------------------------------------------------------
 
-    def discover(self, _parent_instances: list[dict] | None = None):
-        """Scan the filesystem and populate the DB with instances."""
+    def discover(
+        self,
+        _parent_instances: list[dict] | None = None,
+        _ancestry_contexts: list[dict[str, dict]] | None = None,
+    ):
+        """Scan the filesystem and populate the DB with instances.
+
+        *_ancestry_contexts* is a list parallel to *_parent_instances* where
+        each entry maps asset *name* → raw instance dict for every ancestor of
+        the corresponding parent instance.  This context is used to resolve
+        ``${name.path}`` placeholders in ``re=`` patterns.
+        """
         self._ensure_registered()
 
         if self._parent is not None and self._parent._db_id is not None:
@@ -173,26 +262,57 @@ class StaticAsset:
             root_path = self._get_root_path()
             self._db.register_instance(self._db_id, str(root_path), {}, None)
             my_instances = self._db.get_instances(self._db_id, {})
+            # Seed ancestry: root maps to itself
+            my_contexts: list[dict[str, dict]] = [
+                {self.name: inst} for inst in my_instances
+            ]
         elif not _parent_instances:
             my_instances = []
+            my_contexts = []
         else:
-            for parent_inst in _parent_instances:
+            if _ancestry_contexts is None:
+                _ancestry_contexts = [{} for _ in _parent_instances]
+
+            for parent_inst, ancestry_ctx in zip(
+                _parent_instances, _ancestry_contexts, strict=True
+            ):
                 parent_path = Path(parent_inst["path"]) if parent_inst["path"] else None
                 parent_db_id = parent_inst["id"]
-                self._create_instances_for_parent(parent_path, parent_db_id)
-            my_instances = self._db.get_instances(self._db_id, {})
+                self._create_instances_for_parent(
+                    parent_path, parent_db_id, ancestry_ctx
+                )
+
+            all_instances = self._db.get_instances(self._db_id, {})
+            # Map each parent instance id → its ancestry context so we can
+            # propagate the chain to grandchildren.
+            parent_id_to_ctx: dict[int, dict[str, dict]] = {
+                inst["id"]: ctx
+                for inst, ctx in zip(_parent_instances, _ancestry_contexts, strict=True)
+            }
+            my_instances = all_instances
+            my_contexts = [
+                {**parent_id_to_ctx.get(inst.get("parent_id"), {}), self.name: inst}
+                for inst in all_instances
+            ]
 
         # Recurse into children before registering bindings so that all
         # assets have been registered in object_store by the time we need
         # their IDs for object_binding_member.
         for child in self._children:
-            child.discover(_parent_instances=my_instances)
+            child.discover(
+                _parent_instances=my_instances, _ancestry_contexts=my_contexts
+            )
 
         # Register bindings only at the root level (after full tree traversal)
         if _parent_instances is None:
             self._collect_and_register_bindings(set())
 
-    def _create_instances_for_parent(self, parent_path: Path | None, parent_db_id: int):
+    def _create_instances_for_parent(
+        self,
+        parent_path: Path | None,
+        parent_db_id: int,
+        ancestry_context: dict[str, dict] | None = None,
+    ):
         if self._is_dynamic:
             if self._parent and self._parent._reader and parent_path:
                 try:
@@ -206,12 +326,33 @@ class StaticAsset:
                     pass
 
         elif self._re_pattern is not None:
-            if (
-                parent_path is not None
-                and parent_path.exists()
-                and parent_path.is_dir()
-            ):
-                self._scan_for_pattern(parent_path, parent_db_id)
+            if _has_template(self._re_pattern):
+                # Resolve ancestor placeholders, then derive the scan root.
+                try:
+                    resolved = _resolve_template(
+                        self._re_pattern, ancestry_context or {}
+                    )
+                    scan_base, pattern = _split_absolute_pattern(resolved)
+                except (ValueError, AttributeError):
+                    return
+                if scan_base is not None:
+                    if scan_base.exists() and scan_base.is_dir():
+                        self._scan_for_pattern(scan_base, parent_db_id, pattern)
+                else:
+                    # Resolved to a relative pattern — fall back to parent path.
+                    if (
+                        parent_path is not None
+                        and parent_path.exists()
+                        and parent_path.is_dir()
+                    ):
+                        self._scan_for_pattern(parent_path, parent_db_id, pattern)
+            else:
+                if (
+                    parent_path is not None
+                    and parent_path.exists()
+                    and parent_path.is_dir()
+                ):
+                    self._scan_for_pattern(parent_path, parent_db_id)
 
         elif self._fixed_paths is not None:
             base = parent_path if parent_path is not None else self._get_root_path()
@@ -221,8 +362,10 @@ class StaticAsset:
                     self._db_id, str(full_path), {}, parent_db_id
                 )
 
-    def _scan_for_pattern(self, parent_path: Path, parent_db_id: int):
-        pattern = self._re_pattern
+    def _scan_for_pattern(
+        self, parent_path: Path, parent_db_id: int, pattern: str | None = None
+    ):
+        pattern = pattern if pattern is not None else self._re_pattern
         assert pattern is not None
 
         if "/" in pattern:

@@ -165,3 +165,100 @@ def test_instance_path_is_absolute(tmp_path):
 
     inst = sim.instances()[0]
     assert inst.path.is_absolute()
+
+
+# ---------------------------------------------------------------------------
+# Tests for ancestor-path template substitution in re= patterns
+# ---------------------------------------------------------------------------
+
+
+def test_template_absolute_base(tmp_path):
+    """${name.path} resolves the ancestor's path as the scan root."""
+    cutout_base = tmp_path / "cutouts"
+    cutout_base.mkdir()
+    (cutout_base / "output_00001").mkdir()
+    (cutout_base / "output_00002").mkdir()
+    (cutout_base / "other").mkdir()
+
+    root = st.StaticAsset(path=str(tmp_path), name="root")
+    cutout = root.add_children(
+        re=r"${root.path}/cutouts/output_(?P<iout>\d{5})",
+        name="cutout",
+    )
+
+    root.discover()
+
+    instances = cutout.instances()
+    assert len(instances) == 2
+    iout_values = sorted(i.keys["iout"] for i in instances)
+    assert iout_values == ["00001", "00002"]
+
+
+def test_template_path_name_attr(tmp_path):
+    """${name.path.name} resolves to the last path component of an ancestor."""
+    # Structure: tmp_path/sims/simA/  and  tmp_path/cutouts/simA/output_00001/
+    (tmp_path / "sims" / "simA").mkdir(parents=True)
+    cutout_dir = tmp_path / "cutouts" / "simA"
+    cutout_dir.mkdir(parents=True)
+    (cutout_dir / "output_00001").mkdir()
+    (cutout_dir / "output_00042").mkdir()
+
+    root = st.StaticAsset(path=str(tmp_path), name="root")
+    sim = root.add_children(re=r"sims/(?P<sim_name>\w+)", name="simulation")
+    cutout = sim.add_children(
+        re=r"${root.path}/cutouts/${simulation.path.name}/output_(?P<iout>\d{5})",
+        name="cutout",
+    )
+
+    root.discover()
+
+    sim_instances = sim.instances()
+    assert len(sim_instances) == 1
+
+    cutout_instances = cutout.instances()
+    assert len(cutout_instances) == 2
+    iout_values = sorted(i.keys["iout"] for i in cutout_instances)
+    assert iout_values == ["00001", "00042"]
+
+
+def test_template_multiple_sims(tmp_path):
+    """Template resolves independently per simulation instance."""
+    for sim_name in ["simA", "simB"]:
+        (tmp_path / "sims" / sim_name).mkdir(parents=True)
+        cutout_dir = tmp_path / "cutouts" / sim_name
+        cutout_dir.mkdir(parents=True)
+        for i in range(2):
+            (cutout_dir / f"output_{i:05d}").mkdir()
+
+    root = st.StaticAsset(path=str(tmp_path), name="root")
+    sim = root.add_children(re=r"sims/(?P<sim_name>\w+)", name="simulation")
+    cutout = sim.add_children(
+        re=r"${root.path}/cutouts/${simulation.path.name}/output_(?P<iout>\d{5})",
+        name="cutout",
+    )
+
+    root.discover()
+
+    sim_instances = sim.instances()
+    assert len(sim_instances) == 2
+
+    cutout_instances = cutout.instances()
+    # 2 sims × 2 outputs each = 4 total
+    assert len(cutout_instances) == 4
+
+
+def test_template_missing_ancestor_is_silently_skipped(tmp_path):
+    """If a template references an unknown ancestor, the child is skipped gracefully."""
+    (tmp_path / "sims" / "simA").mkdir(parents=True)
+
+    root = st.StaticAsset(path=str(tmp_path), name="root")
+    sim = root.add_children(re=r"sims/(?P<sim_name>\w+)", name="simulation")
+    # Misspelled ancestor name: "typo" doesn't exist
+    bad = sim.add_children(
+        re=r"${typo.path}/output_(?P<iout>\d{5})",
+        name="bad",
+    )
+
+    root.discover()  # should not raise
+
+    assert bad.instances() == []
