@@ -4,6 +4,7 @@ import fnmatch
 import hashlib
 import json
 import re as re_module
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -420,133 +421,148 @@ class StaticAsset:
         indent = "  " * depth
         asset_id = self._ensure_registered()
 
-        logger.debug("%sdiscover[%s] start", indent, self.name)
-        logger.debug("%sdiscover[%s] registered", indent, self.name)
+        # Top-level discover batches all DB writes into one commit.
+        group_ctx = (
+            self._db.group_operations() if _parent_instances is None else nullcontext()
+        )
+        with group_ctx:
+            logger.debug("%sdiscover[%s] start", indent, self.name)
+            logger.debug("%sdiscover[%s] registered", indent, self.name)
 
-        if self._parent is not None and self._parent._db_id is not None:
-            self._db.register_hierarchy(self._parent._db_id, asset_id)
-            logger.debug("%sdiscover[%s] hierarchy linked", indent, self.name)
+            if self._parent is not None and self._parent._db_id is not None:
+                self._db.register_hierarchy(self._parent._db_id, asset_id)
+                logger.debug("%sdiscover[%s] hierarchy linked", indent, self.name)
 
-        if _parent_instances is None:
-            # Root asset: create a single instance at the root path
-            root_path = self._get_root_path()
-            mtime = (
-                int(root_path.stat().st_mtime)
-                if root_path.exists()
-                else int(time.time())
-            )
-            self._db.register_instance(
-                asset_id, str(root_path), {}, None, timestamp=mtime
-            )
-            logger.debug("%sdiscover[%s] root instance registered", indent, self.name)
-            my_instances = self._db.get_instances(asset_id, {})
-            logger.debug(
-                "%sdiscover[%s] instances loaded=%d",
-                indent,
-                self.name,
-                len(my_instances),
-            )
-            # Seed ancestry: root maps to itself
-            my_contexts: list[dict[str, dict]] = [
-                {self.name: inst} for inst in my_instances
-            ]
-        elif not _parent_instances:
-            my_instances = []
-            my_contexts = []
-            logger.debug(
-                "%sdiscover[%s] skipped (no parent instances)",
-                indent,
-                self.name,
-            )
-        else:
-            if _ancestry_contexts is None:
-                _ancestry_contexts = [{} for _ in _parent_instances]
+            if _parent_instances is None:
+                # Root asset: create a single instance at the root path
+                root_path = self._get_root_path()
+                mtime = (
+                    int(root_path.stat().st_mtime)
+                    if root_path.exists()
+                    else int(time.time())
+                )
+                self._db.register_instance(
+                    asset_id, str(root_path), {}, None, timestamp=mtime
+                )
+                logger.debug(
+                    "%sdiscover[%s] root instance registered",
+                    indent,
+                    self.name,
+                )
+                my_instances = self._db.get_instances(asset_id, {})
+                logger.debug(
+                    "%sdiscover[%s] instances loaded=%d",
+                    indent,
+                    self.name,
+                    len(my_instances),
+                )
+                # Seed ancestry: root maps to itself
+                my_contexts: list[dict[str, dict]] = [
+                    {self.name: inst} for inst in my_instances
+                ]
+            elif not _parent_instances:
+                my_instances = []
+                my_contexts = []
+                logger.debug(
+                    "%sdiscover[%s] skipped (no parent instances)",
+                    indent,
+                    self.name,
+                )
+            else:
+                if _ancestry_contexts is None:
+                    _ancestry_contexts = [{} for _ in _parent_instances]
 
-            for parent_inst, ancestry_ctx in zip(
-                _parent_instances, _ancestry_contexts, strict=True
-            ):
-                parent_path = Path(parent_inst["path"]) if parent_inst["path"] else None
-                parent_db_id = parent_inst["id"]
-                # Check DB for existing instance and timestamp
-                if parent_path and parent_path.exists():
-                    mtime = int(parent_path.stat().st_mtime)
-                else:
-                    mtime = int(time.time())
-                # If not force, check DB timestamp
-                skip = False
-                if not force:
-                    rows = self._db.get_instances(asset_id, {})
-                    for row in rows:
-                        if row["parent_id"] == parent_db_id and row["path"] == str(
-                            parent_path
-                        ):
-                            dbts = row.get("timestamp")
-                            if dbts is not None and dbts >= mtime:
-                                skip = True
-                                break
-                if skip:
-                    logger.debug(
-                        "%sdiscover[%s] skipping unchanged instance %s",
-                        indent,
-                        self.name,
-                        parent_path,
+                for parent_inst, ancestry_ctx in zip(
+                    _parent_instances, _ancestry_contexts, strict=True
+                ):
+                    parent_path = (
+                        Path(parent_inst["path"]) if parent_inst["path"] else None
                     )
-                    continue
-                self._create_instances_for_parent(
-                    parent_path,
-                    parent_db_id,
-                    ancestry_ctx,
-                    _depth=depth + 1,
-                    _mtime=mtime,
-                    _force=force,
+                    parent_db_id = parent_inst["id"]
+                    # Check DB for existing instance and timestamp
+                    if parent_path and parent_path.exists():
+                        mtime = int(parent_path.stat().st_mtime)
+                    else:
+                        mtime = int(time.time())
+                    # If not force, check DB timestamp
+                    skip = False
+                    if not force:
+                        rows = self._db.get_instances(asset_id, {})
+                        for row in rows:
+                            if row["parent_id"] == parent_db_id and row["path"] == str(
+                                parent_path
+                            ):
+                                dbts = row.get("timestamp")
+                                if dbts is not None and dbts >= mtime:
+                                    skip = True
+                                    break
+                    if skip:
+                        logger.debug(
+                            "%sdiscover[%s] skipping unchanged instance %s",
+                            indent,
+                            self.name,
+                            parent_path,
+                        )
+                        continue
+                    self._create_instances_for_parent(
+                        parent_path,
+                        parent_db_id,
+                        ancestry_ctx,
+                        _depth=depth + 1,
+                        _mtime=mtime,
+                        _force=force,
+                    )
+                logger.debug(
+                    "%sdiscover[%s] parent scans=%d",
+                    indent,
+                    self.name,
+                    len(_parent_instances),
                 )
-            logger.debug(
-                "%sdiscover[%s] parent scans=%d",
-                indent,
-                self.name,
-                len(_parent_instances),
-            )
 
-            all_instances = self._db.get_instances(asset_id, {})
-            logger.debug(
-                "%sdiscover[%s] instances loaded=%d",
-                indent,
-                self.name,
-                len(all_instances),
-            )
-            # Map each parent instance id → its ancestry context so we can
-            # propagate the chain to grandchildren.
-            parent_id_to_ctx: dict[int, dict[str, dict]] = {
-                inst["id"]: ctx
-                for inst, ctx in zip(_parent_instances, _ancestry_contexts, strict=True)
-            }
-            my_instances = all_instances
-            my_contexts = []
-            for inst in all_instances:
-                parent_id = inst.get("parent_id")
-                inherited = (
-                    parent_id_to_ctx.get(parent_id, {})
-                    if isinstance(parent_id, int)
-                    else {}
+                all_instances = self._db.get_instances(asset_id, {})
+                logger.debug(
+                    "%sdiscover[%s] instances loaded=%d",
+                    indent,
+                    self.name,
+                    len(all_instances),
                 )
-                my_contexts.append({**inherited, self.name: inst})
+                # Map each parent instance id → its ancestry context so we can
+                # propagate the chain to grandchildren.
+                parent_id_to_ctx: dict[int, dict[str, dict]] = {
+                    inst["id"]: ctx
+                    for inst, ctx in zip(
+                        _parent_instances,
+                        _ancestry_contexts,
+                        strict=True,
+                    )
+                }
+                my_instances = all_instances
+                my_contexts = []
+                for inst in all_instances:
+                    parent_id = inst.get("parent_id")
+                    inherited = (
+                        parent_id_to_ctx.get(parent_id, {})
+                        if isinstance(parent_id, int)
+                        else {}
+                    )
+                    my_contexts.append({**inherited, self.name: inst})
 
-        # Recurse into children before registering bindings so that all
-        # assets have been registered in object_store by the time we need
-        # their IDs for object_binding_member.
-        for child in self._children:
-            child.discover(
-                _parent_instances=my_instances,
-                _ancestry_contexts=my_contexts,
-                force=force,
-            )
+            # Recurse into children before registering bindings so that all
+            # assets have been registered in object_store by the time we need
+            # their IDs for object_binding_member.
+            for child in self._children:
+                child.discover(
+                    _parent_instances=my_instances,
+                    _ancestry_contexts=my_contexts,
+                    force=force,
+                )
 
-        # Register bindings only at the root level (after full tree traversal)
-        if _parent_instances is None:
-            self._collect_and_register_bindings(set())
-            logger.debug("%sdiscover[%s] bindings collected", indent, self.name)
+            # Register bindings only at the root level (after full tree traversal)
+            if _parent_instances is None:
+                self._collect_and_register_bindings(set())
+                logger.debug("%sdiscover[%s] bindings collected", indent, self.name)
 
-        logger.debug("%sdiscover[%s] done", indent, self.name)
+            logger.debug("%sdiscover[%s] done", indent, self.name)
 
     def _depth(self) -> int:
         depth = 0
