@@ -589,12 +589,20 @@ class StaticAsset:
                 created = 0
                 try:
                     data = self._parent._load_reader_for_path(parent_path)
+                    entries: list[dict] = []
                     for key_val, _item in self._generator(data):
-                        keys = {self._generator_key: str(key_val)}
-                        self._db.register_instance(
-                            asset_id, None, keys, parent_db_id, timestamp=_mtime
+                        entries.append(
+                            {
+                                "path": None,
+                                "keys": {self._generator_key: str(key_val)},
+                                "timestamp": _mtime,
+                            }
                         )
-                        created += 1
+                    created = self._db.register_instances_bulk(
+                        asset_id,
+                        parent_db_id,
+                        entries,
+                    )
                     logger.debug(
                         "%sdynamic[%s] parent_id=%d created=%d",
                         indent,

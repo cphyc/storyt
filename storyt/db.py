@@ -343,6 +343,73 @@ class Database:
         finally:
             self._release_session(session, owns_session)
 
+    def register_instances_bulk(
+        self,
+        object_id: int,
+        parent_id: int | None,
+        entries: list[dict],
+    ) -> int:
+        """Register many instances at once.
+
+        Each entry is a dict with keys: path, keys, timestamp.
+        Returns the number of newly inserted instances.
+        """
+        if not entries:
+            return 0
+
+        session, owns_session = self._acquire_session()
+        try:
+            existing_rows = (
+                session.query(ObjectInstance)
+                .filter_by(object_id=object_id, parent_id=parent_id)
+                .all()
+            )
+            existing_index = {
+                (
+                    row.path,
+                    json.dumps(row.keys, sort_keys=True),
+                ): row
+                for row in existing_rows
+            }
+
+            to_add: list[ObjectInstance] = []
+            inserted = 0
+
+            for entry in entries:
+                path = entry.get("path")
+                keys = entry.get("keys") or {}
+                timestamp = entry.get("timestamp")
+
+                sig = (path, json.dumps(keys, sort_keys=True))
+                existing = existing_index.get(sig)
+                if existing is not None:
+                    if timestamp is not None and (
+                        existing.timestamp is None or existing.timestamp < timestamp
+                    ):
+                        existing.timestamp = timestamp
+                    continue
+
+                to_add.append(
+                    ObjectInstance(
+                        object_id=object_id,
+                        path=path,
+                        keys=keys,
+                        parent_id=parent_id,
+                        timestamp=timestamp,
+                    )
+                )
+                existing_index[sig] = to_add[-1]
+                inserted += 1
+
+            if to_add:
+                session.add_all(to_add)
+
+            # One flush/commit for the whole batch.
+            self._flush_or_commit(session, owns_session)
+            return inserted
+        finally:
+            self._release_session(session, owns_session)
+
     def register_property(
         self, obj_id: int, name: str, source_hash: str, serializer: str = "pickle"
     ) -> int:
