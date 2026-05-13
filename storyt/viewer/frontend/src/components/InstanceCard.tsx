@@ -7,7 +7,7 @@ interface Props {
   instance: Instance;
   childrenTypes: TreeNode[];
   parentUrlPath: string | null;
-  onNavigate: (inst: Instance) => void;
+  onNavigate: (inst: Instance, treeNode?: TreeNode) => void;
 }
 
 export function InstanceCard({
@@ -54,7 +54,11 @@ export function InstanceCard({
       SiblingEntry,
     ][]) {
       for (const prop of sib.properties || []) {
-        const base = sib.url_path ? `data/${sib.url_path}` : "data";
+        // Property files live in the parent directory of the sibling's url_path
+        const sibParent = sib.url_path
+          ? sib.url_path.split("/").slice(0, -1).join("/")
+          : null;
+        const base = sibParent ? `data/${sibParent}` : "data";
         const data = (await cachedFetch(`${base}/${prop}.json`)) as Array<{
           id: number;
           value: unknown;
@@ -102,12 +106,30 @@ export function InstanceCard({
       {Object.keys(siblings).length > 0 && (
         <div>
           {(Object.entries(siblings) as [string, SiblingEntry][]).map(
-            ([sibName, sib]) => (
-              <div key={sibName} className="sibling-section">
-                <span className="sibling-name">{sibName}</span>
-                {siblingKeyStr(sib) && <span>: {siblingKeyStr(sib)}</span>}
-              </div>
-            ),
+            ([sibName, sib]) => {
+              const sibHasChildren = (sib._treeNode?.children.length ?? 0) > 0;
+              const sibInst: Instance = {
+                id: sib.id ?? 0,
+                keys: sib.keys,
+                path: sib.path,
+                url_path: sib.url_path,
+              };
+              return (
+                <div key={sibName} className="sibling-section">
+                  <span className="sibling-name">{sibName}</span>
+                  {siblingKeyStr(sib) && <span>: {siblingKeyStr(sib)}</span>}
+                  {sibHasChildren && sib.url_path && (
+                    <span
+                      className="nav-link"
+                      style={{ marginLeft: 8, fontSize: "12px" }}
+                      onClick={() => onNavigate(sibInst, sib._treeNode)}
+                    >
+                      → open
+                    </span>
+                  )}
+                </div>
+              );
+            },
           )}
         </div>
       )}

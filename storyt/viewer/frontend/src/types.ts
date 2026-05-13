@@ -27,6 +27,7 @@ export interface SiblingEntry {
   path: string | null;
   url_path: string | null;
   properties: string[];
+  _treeNode?: TreeNode; // injected by AssetListView after fetch
 }
 
 export interface Instance {

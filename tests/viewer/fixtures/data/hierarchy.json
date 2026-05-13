@@ -3,10 +3,20 @@
     "id": 1, "name": "root", "pattern": null, "is_dynamic": false,
     "children": [{
       "id": 2, "name": "simulation", "pattern": null, "is_dynamic": false,
-      "children": [{
-        "id": 3, "name": "output", "pattern": "output_(?P<iout>\\d{5})", "is_dynamic": false,
-        "children": []
-      }]
+      "children": [
+        {
+          "id": 3, "name": "output", "pattern": "output_(?P<iout>\\d{5})",
+          "is_dynamic": false, "children": []
+        },
+        {
+          "id": 4, "name": "halo_catalogue",
+          "pattern": "halos_(?P<iout>\\d{5})\\.txt",
+          "is_dynamic": false,
+          "children": [
+            {"id": 5, "name": "halo", "pattern": null, "is_dynamic": true, "children": []}
+          ]
+        }
+      ]
     }]
   },
   "bindings": [{
