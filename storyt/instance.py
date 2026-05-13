@@ -10,6 +10,39 @@ if TYPE_CHECKING:
     from .asset import StaticAsset
 
 
+class _InstanceReaderAccessor:
+    def __init__(self, instance: AssetInstance):
+        self._instance = instance
+
+    def __getitem__(self, name: str):
+        cache = self._instance._reader_cache
+        if name in cache:
+            return cache[name]
+
+        readers = self._instance.asset._readers
+        if name not in readers:
+            raise KeyError(
+                f"Reader '{name}' is not registered for asset '{self._instance.asset.name}'"
+            )
+
+        fn, deps = readers[name]
+        for dep in deps:
+            _ = self[dep]
+
+        value = fn(self._instance)
+        cache[name] = value
+        return value
+
+    def get(self, name: str, default=None):
+        try:
+            return self[name]
+        except KeyError:
+            return default
+
+    def __contains__(self, name: str) -> bool:
+        return name in self._instance.asset._readers
+
+
 class AssetInstance:
     def __init__(
         self,
@@ -24,15 +57,16 @@ class AssetInstance:
         self.path = path
         self.keys = keys
         self.parent_id = parent_id
+        self._reader_cache: dict[str, object] = {}
+        self.reader = _InstanceReaderAccessor(self)
 
     # ------------------------------------------------------------------
     # Data loading
     # ------------------------------------------------------------------
 
     def load(self):
-        if self.asset._reader is None:
-            raise RuntimeError(f"No reader defined for asset '{self.asset.name}'")
-        return self.asset._reader(self.path)
+        default_name = self.asset._resolve_default_reader()
+        return self.reader[default_name]
 
     # ------------------------------------------------------------------
     # Binding resolution

@@ -191,7 +191,8 @@ class StaticAsset:
         self._generator_key = _generator_key
         self._fixed_paths = _fixed_paths
         self._children: list[StaticAsset] = []
-        self._reader: Callable | None = None
+        self._readers: dict[str, tuple[Callable, list[str]]] = {}
+        self._default_reader_name: str | None = None
         self._properties: dict[str, Property] = {}
         self._bindings: list[list[tuple[StaticAsset, str]]] = []
         self._db_id: int | None = None
@@ -219,6 +220,33 @@ class StaticAsset:
         parent_hash = self._parent._compute_hash() if self._parent else ""
         data = f"{parent_hash}|{self.name}|{self._re_pattern}|{int(self._is_dynamic)}"
         return hashlib.sha256(data.encode()).hexdigest()
+
+    @staticmethod
+    def _normalize_requires(requires: str | list[str] | None) -> list[str]:
+        if requires is None:
+            return []
+        if isinstance(requires, str):
+            return [requires]
+        return list(requires)
+
+    def _has_reader(self, name: str) -> bool:
+        return name in self._readers
+
+    def _resolve_default_reader(self) -> str:
+        if self._default_reader_name is None:
+            raise RuntimeError(f"No reader defined for asset '{self.name}'")
+        return self._default_reader_name
+
+    def _load_reader_for_path(self, path: Path, reader_name: str | None = None):
+        name = reader_name or self._resolve_default_reader()
+        if name not in self._readers:
+            raise RuntimeError(
+                f"Reader '{name}' is not registered for asset '{self.name}'"
+            )
+        from .instance import AssetInstance
+
+        temp = AssetInstance(self, -1, path, {}, None)
+        return temp.reader[name]
 
     def _ensure_registered(self) -> int:
         if self._db_id is not None:
@@ -272,26 +300,92 @@ class StaticAsset:
         self._children.append(child)
         return child
 
+    def register_reader(
+        self,
+        fn: Callable | None = None,
+        *,
+        name: str | None = None,
+        requires: str | list[str] | None = None,
+    ):
+        """Register a named reader.
+
+        Can be used as:
+        - register_reader(lambda inst: ..., name="df")
+        - @register_reader
+        - @register_reader(requires="other_reader")
+        """
+
+        deps = self._normalize_requires(requires)
+
+        def decorator(f: Callable) -> Callable:
+            reader_name = name
+            if reader_name is None:
+                if f.__name__ == "<lambda>":
+                    raise ValueError("A lambda reader requires an explicit name=")
+                reader_name = f.__name__
+
+            for dep in deps:
+                if dep not in self._readers:
+                    raise ValueError(
+                        f"Reader '{reader_name}' depends on unknown reader '{dep}'"
+                    )
+
+            self._readers[reader_name] = (f, deps)
+            if self._default_reader_name is None:
+                self._default_reader_name = reader_name
+            return f
+
+        if fn is None:
+            return decorator
+        return decorator(fn)
+
     def reader(self, fn: Callable) -> Callable:
-        """Set the reader function for this asset."""
-        self._reader = fn
+        """Backward-compatible single-reader API.
+
+        The callable receives a path in this legacy API.
+        """
+
+        def _legacy(inst):
+            return fn(inst.path)
+
+        self._readers["default"] = (_legacy, [])
+        self._default_reader_name = "default"
         return fn
 
     def add_property(
-        self, name: str, fn=None, requires=None, serializer: str = "pickle"
+        self,
+        name: str,
+        fn=None,
+        requires=None,
+        serializer: str = "pickle",
+        reader: str | None = None,
     ):
         """Register a computed property (can be used as a decorator)."""
+        req = self._normalize_requires(requires)
+        if reader is not None and not self._has_reader(reader):
+            raise ValueError(
+                f"Unknown reader '{reader}' for property '{name}' on asset '{self.name}'"
+            )
+
         if fn is None:
 
             def decorator(f: Callable) -> Callable:
                 self._properties[name] = Property(
-                    name, f, serializer=serializer, requires=requires
+                    name,
+                    f,
+                    serializer=serializer,
+                    requires=req,
+                    reader=reader,
                 )
                 return f
 
             return decorator
         self._properties[name] = Property(
-            name, fn, serializer=serializer, requires=requires
+            name,
+            fn,
+            serializer=serializer,
+            requires=req,
+            reader=reader,
         )
 
     def all(self) -> Query:
@@ -484,10 +578,10 @@ class StaticAsset:
         indent = "  " * _depth
         asset_id = self._ensure_registered()
         if self._is_dynamic:
-            if self._parent and self._parent._reader and parent_path:
+            if self._parent is not None and parent_path:
                 created = 0
                 try:
-                    data = self._parent._reader(parent_path)
+                    data = self._parent._load_reader_for_path(parent_path)
                     for key_val, _item in self._generator(data):  # type: ignore[misc]
                         keys = {self._generator_key: str(key_val)}  # type: ignore[index]
                         self._db.register_instance(

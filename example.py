@@ -133,9 +133,19 @@ with tempfile.TemporaryDirectory(prefix="storyt_example_") as tmpdir:
     )
 
     # Readers (would be yt.load / pandas.read_csv in production)
-    output.reader(lambda path: path)
-    halo_catalogue.reader(FakeCatalogue)
-    cutout.reader(FakeCutout)
+    output.register_reader(lambda inst: inst.path, name="path")
+
+    @halo_catalogue.register_reader(name="catalogue")
+    def catalogue_reader(inst):
+        return FakeCatalogue(inst.path)
+
+    @cutout.register_reader(name="ds")
+    def ds(inst):
+        return FakeCutout(inst.path)
+
+    @cutout.register_reader(requires="ds")
+    def sp(inst):
+        return inst.reader["ds"]
 
     # Dynamic children: one AssetInstance per row in the catalogue
     halo = halo_catalogue.add_children(
@@ -147,12 +157,16 @@ with tempfile.TemporaryDirectory(prefix="storyt_example_") as tmpdir:
     # 4.  Register properties
     # ---------------------------------------------------------------------------
 
-    cutout.add_property("total_gas_mass", lambda c: c.load().gas_mass)
-    cutout.add_property("total_stellar_mass", lambda c: c.load().stellar_mass)
+    cutout.add_property("total_gas_mass", lambda ds: ds.gas_mass, reader="ds")
+    cutout.add_property(
+        "total_stellar_mass",
+        lambda ds: ds.stellar_mass,
+        reader="ds",
+    )
 
-    @cutout.add_property("SFR")
-    def _SFR(c):
-        data = c.load()._data
+    @cutout.add_property("SFR", reader="sp")
+    def _SFR(sp):
+        data = sp._data
         counts, edges = np.histogram(data, bins=np.linspace(0, 10, 5))
         return counts.tolist()
 

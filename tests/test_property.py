@@ -147,3 +147,47 @@ def test_property_with_multiple_instances(tmp_path):
     instances = output.instances()
     values = sorted(inst.iout_int for inst in instances)
     assert values == [0, 1, 2]
+
+
+def test_register_reader_lambda_requires_name(setup):
+    root, sim = setup
+
+    with pytest.raises(ValueError, match="lambda reader requires"):
+        sim.register_reader(lambda inst: inst.path)
+
+
+def test_register_reader_and_property_reader_binding(setup):
+    root, sim = setup
+
+    calls = {"ds": 0, "sp": 0}
+
+    @sim.register_reader
+    def ds(inst):
+        calls["ds"] += 1
+        return {"path": str(inst.path)}
+
+    @sim.register_reader(requires="ds")
+    def sp(inst):
+        calls["sp"] += 1
+        data = inst.reader["ds"]
+        return {"n": len(data["path"])}
+
+    @sim.add_property("path_len", reader="sp")
+    def _path_len(sp_data):
+        return sp_data["n"]
+
+    inst = sim.instances()[0]
+    val1 = inst.path_len
+    val2 = inst.path_len
+
+    assert val1 == val2
+    # Reader-backed property value should be cached in DB; reader graph runs once.
+    assert calls["ds"] == 1
+    assert calls["sp"] == 1
+
+
+def test_add_property_unknown_reader_raises(setup):
+    root, sim = setup
+
+    with pytest.raises(ValueError, match="Unknown reader"):
+        sim.add_property("x", lambda _v: 1, reader="missing_reader")
