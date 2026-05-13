@@ -1,5 +1,7 @@
 import hashlib
 import json
+import logging
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -17,6 +19,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Session, relationship
+
+logger = logging.getLogger("storyt")
 
 
 class Base(DeclarativeBase):
@@ -174,6 +178,9 @@ class Database:
         Base.metadata.create_all(self.engine)
         self._group_session: Session | None = None
         self._group_depth = 0
+        self._group_commit_interval_s: float | None = None
+        self._group_last_checkpoint_ts: float = 0.0
+        self._group_has_unflushed_writes = False
 
     # ------------------------------------------------------------------
     # Pickle support (required for dask "processes" scheduler)
@@ -202,14 +209,34 @@ class Database:
         if owns_session:
             session.close()
 
+    def _flush_before_group_read(self, session: Session, owns_session: bool) -> None:
+        if not owns_session and self._group_has_unflushed_writes:
+            session.flush()
+            self._group_has_unflushed_writes = False
+
     def _flush_or_commit(self, session: Session, owns_session: bool) -> None:
         if owns_session:
             session.commit()
         else:
+            self._group_has_unflushed_writes = True
+            # Always flush in grouped mode so generated PKs are available
+            # immediately (e.g. register_asset_type -> hierarchy links).
             session.flush()
+            self._group_has_unflushed_writes = False
+            interval = self._group_commit_interval_s
+            if interval is None:
+                return
+            now = time.monotonic()
+            if (now - self._group_last_checkpoint_ts) >= interval:
+                session.commit()
+                self._group_last_checkpoint_ts = now
+                logger.debug(
+                    "db.group_operations checkpoint commit (interval=%.2fs)",
+                    interval,
+                )
 
     @contextmanager
-    def group_operations(self):
+    def group_operations(self, commit_interval_s: float | None = 10.0):
         """Group many DB operations into one transaction.
 
         Outside this context, each write method keeps the current behavior
@@ -217,20 +244,30 @@ class Database:
         and defer commit until exiting the outermost block.
         """
         if self._group_session is None:
-            self._group_session = self._session()
+            self._group_session = Session(self.engine, autoflush=False)
+            self._group_commit_interval_s = commit_interval_s
+            self._group_last_checkpoint_ts = time.monotonic()
+            self._group_has_unflushed_writes = False
         self._group_depth += 1
         try:
             yield self
             self._group_depth -= 1
             if self._group_depth == 0 and self._group_session is not None:
+                if self._group_has_unflushed_writes:
+                    self._group_session.flush()
                 self._group_session.commit()
+                logger.debug("db.group_operations final commit")
                 self._group_session.close()
                 self._group_session = None
+                self._group_commit_interval_s = None
+                self._group_has_unflushed_writes = False
         except Exception:
             if self._group_session is not None:
                 self._group_session.rollback()
                 self._group_session.close()
                 self._group_session = None
+            self._group_commit_interval_s = None
+            self._group_has_unflushed_writes = False
             self._group_depth = 0
             raise
 
@@ -459,6 +496,7 @@ class Database:
     ) -> bytes | None:
         session, owns_session = self._acquire_session()
         try:
+            self._flush_before_group_read(session, owns_session)
             row = (
                 session.query(ObjectData)
                 .filter_by(obj_property_id=property_id, obj_instance_id=instance_id)
@@ -541,6 +579,7 @@ class Database:
     def get_property_dep_ids(self, property_id: int) -> list[int]:
         session, owns_session = self._acquire_session()
         try:
+            self._flush_before_group_read(session, owns_session)
             rows = (
                 session.query(ObjectPropertyDep)
                 .filter_by(property_id=property_id)
@@ -555,6 +594,7 @@ class Database:
     ) -> list[dict]:
         session, owns_session = self._acquire_session()
         try:
+            self._flush_before_group_read(session, owns_session)
             rows = (
                 session.query(ObjectInstance)
                 .filter_by(parent_id=parent_instance_id, object_id=child_object_id)
@@ -577,6 +617,7 @@ class Database:
     def get_instances(self, object_id: int, key_filters: dict) -> list[dict]:
         session, owns_session = self._acquire_session()
         try:
+            self._flush_before_group_read(session, owns_session)
             rows = session.query(ObjectInstance).filter_by(object_id=object_id).all()
             result = []
             for row in rows:
@@ -599,6 +640,7 @@ class Database:
         """Return {parent_id: max(timestamp)} for instances of an asset."""
         session, owns_session = self._acquire_session()
         try:
+            self._flush_before_group_read(session, owns_session)
             rows = (
                 session.query(
                     ObjectInstance.parent_id,
@@ -621,6 +663,7 @@ class Database:
     ) -> list[dict]:
         session, owns_session = self._acquire_session()
         try:
+            self._flush_before_group_read(session, owns_session)
             inst = session.query(ObjectInstance).filter_by(id=instance_id).first()
             if inst is None:
                 return []

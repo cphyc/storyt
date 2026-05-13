@@ -158,6 +158,20 @@ def test_group_operations_rolls_back_on_error(tmp_path):
     assert rows == 0
 
 
+def test_group_operations_periodic_checkpoint_commit(tmp_path):
+    db = st.StaticAsset(path=str(tmp_path), name="root")._db
+
+    with db.group_operations(commit_interval_s=0.0):
+        obj_id = db.register_asset_type("x", None, False, "hash-x")
+        db.register_instance(obj_id, "/tmp/x", {}, None, timestamp=1)
+
+        # Interval=0 forces immediate checkpoint commits during grouped writes.
+        inside = db.conn.execute(
+            "SELECT COUNT(*) AS n FROM object_instance"
+        ).fetchone()["n"]
+        assert inside == 1
+
+
 def test_regex_subdirectory_pattern(tmp_path):
     subdir = tmp_path / "halos"
     subdir.mkdir()
