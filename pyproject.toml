@@ -9,7 +9,7 @@ requires-python = ">=3.11"
 dependencies = ["dask>=2022.12.1", "sqlalchemy>=2.0.0"]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "pytest-playwright"]
 
 [tool.setuptools.packages.find]
 where = ["."]

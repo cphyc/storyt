@@ -18,6 +18,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: storyt/viewer/frontend/package-lock.json
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -26,6 +33,13 @@ jobs:
 
       - name: Install package and test dependencies
         run: pip install -e .[dev]
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: storyt/viewer/frontend
+
+      - name: Install Playwright browser
+        run: playwright install --with-deps chromium
 
       - name: Run tests
         run: pytest
