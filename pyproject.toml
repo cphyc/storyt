@@ -13,3 +13,33 @@ dev = ["pytest"]
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["storyt*"]
+[tool.ruff]
+exclude = [
+    "storit.egg-info",
+]
+
+[tool.ruff.lint]
+preview = true
+explicit-preview-rules = true
+select = [
+    "E",
+    "F",
+    "W",
+    "C4",   # flake8-comprehensions
+    "B",    # flake8-bugbear
+    "G",    # flake8-logging-format
+    "TC",   # flake8-type-checking
+    "UP",   # pyupgrade
+    "I",    # isort
+    "RUF031",  # incorrectly-parenthesized-tuple-in-subscript (preview)
+]
+ignore = [
+    "E501",  # line too long
+    "E741",  # ambiguous variable name
+]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+
+[tool.pytest.ini_options]
+addopts = "-rsfE"
