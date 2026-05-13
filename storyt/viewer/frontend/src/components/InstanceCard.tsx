@@ -21,6 +21,7 @@ export function InstanceCard({
   const [loadingProps, setLoadingProps] = useState(false);
 
   const keyString = Object.entries(instance.keys || {})
+    .sort(([a], [b]) => a.localeCompare(b))
     .map(([k, v]) => `${k}=${v}`)
     .join(", ");
   const displayLabel = keyString || instance.url_path || String(instance.id);
@@ -34,8 +35,11 @@ export function InstanceCard({
   const fetchProperties = async () => {
     setLoadingProps(true);
     const rows: PropertyRow[] = [];
+    const ownProps = [...(instance.properties || [])].sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }),
+    );
 
-    for (const prop of instance.properties || []) {
+    for (const prop of ownProps) {
       const base = parentUrlPath ? `data/${parentUrlPath}` : "data";
       const data = (await cachedFetch(`${base}/${prop}.json`)) as Array<{
         id: number;
@@ -49,11 +53,33 @@ export function InstanceCard({
       });
     }
 
-    for (const [sibName, sib] of Object.entries(siblings) as [
-      string,
-      SiblingEntry,
-    ][]) {
-      for (const prop of sib.properties || []) {
+    const siblingEntries = (
+      Object.entries(siblings) as [string, SiblingEntry][]
+    ).sort(([nameA, sibA], [nameB, sibB]) => {
+      const baseCmp = nameA.localeCompare(nameB, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
+      if (baseCmp !== 0) return baseCmp;
+      const keyA = Object.entries(sibA.keys || {})
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([k, v]) => `${k}=${v}`)
+        .join(", ");
+      const keyB = Object.entries(sibB.keys || {})
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([k, v]) => `${k}=${v}`)
+        .join(", ");
+      return keyA.localeCompare(keyB, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
+    });
+
+    for (const [sibName, sib] of siblingEntries as [string, SiblingEntry][]) {
+      const sibProps = [...(sib.properties || [])].sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }),
+      );
+      for (const prop of sibProps) {
         // Property files live in the parent directory of the sibling's url_path
         const sibParent = sib.url_path
           ? sib.url_path.split("/").slice(0, -1).join("/")
@@ -72,6 +98,18 @@ export function InstanceCard({
       }
     }
 
+    rows.sort((a, b) => {
+      const siblingCmp = a.sibling.localeCompare(b.sibling, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
+      if (siblingCmp !== 0) return siblingCmp;
+      return a.property.localeCompare(b.property, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
+    });
+
     setPropertyRows(rows);
     setLoadingProps(false);
   };
@@ -86,8 +124,23 @@ export function InstanceCard({
 
   const siblingKeyStr = (sib: SiblingEntry) =>
     Object.entries(sib.keys || {})
+      .sort(([a], [b]) => a.localeCompare(b))
       .map(([k, v]) => `${k}=${v}`)
       .join(", ");
+
+  const sortedSiblings = (
+    Object.entries(siblings) as [string, SiblingEntry][]
+  ).sort(([nameA, sibA], [nameB, sibB]) => {
+    const baseCmp = nameA.localeCompare(nameB, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+    if (baseCmp !== 0) return baseCmp;
+    return siblingKeyStr(sibA).localeCompare(siblingKeyStr(sibB), undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  });
 
   return (
     <div className="card">
@@ -105,32 +158,30 @@ export function InstanceCard({
       </div>
       {Object.keys(siblings).length > 0 && (
         <div>
-          {(Object.entries(siblings) as [string, SiblingEntry][]).map(
-            ([sibName, sib]) => {
-              const sibHasChildren = (sib._treeNode?.children.length ?? 0) > 0;
-              const sibInst: Instance = {
-                id: sib.id ?? 0,
-                keys: sib.keys,
-                path: sib.path,
-                url_path: sib.url_path,
-              };
-              return (
-                <div key={sibName} className="sibling-section">
-                  <span className="sibling-name">{sibName}</span>
-                  {siblingKeyStr(sib) && <span>: {siblingKeyStr(sib)}</span>}
-                  {sibHasChildren && sib.url_path && (
-                    <span
-                      className="nav-link"
-                      style={{ marginLeft: 8, fontSize: "12px" }}
-                      onClick={() => onNavigate(sibInst, sib._treeNode)}
-                    >
-                      → open
-                    </span>
-                  )}
-                </div>
-              );
-            },
-          )}
+          {sortedSiblings.map(([sibName, sib]) => {
+            const sibHasChildren = (sib._treeNode?.children.length ?? 0) > 0;
+            const sibInst: Instance = {
+              id: sib.id ?? 0,
+              keys: sib.keys,
+              path: sib.path,
+              url_path: sib.url_path,
+            };
+            return (
+              <div key={sibName} className="sibling-section">
+                <span className="sibling-name">{sibName}</span>
+                {siblingKeyStr(sib) && <span>: {siblingKeyStr(sib)}</span>}
+                {sibHasChildren && sib.url_path && (
+                  <span
+                    className="nav-link"
+                    style={{ marginLeft: 8, fontSize: "12px" }}
+                    onClick={() => onNavigate(sibInst, sib._treeNode)}
+                  >
+                    → open
+                  </span>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
       {expanded && (

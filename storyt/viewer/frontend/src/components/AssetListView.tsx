@@ -25,6 +25,17 @@ function primaryChildren(
   return children.filter((c) => !skip.has(c.id));
 }
 
+function keyString(keys: Record<string, string> | undefined): string {
+  return Object.entries(keys || {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${k}=${v}`)
+    .join(", ");
+}
+
+function instanceSortKey(inst: Instance): string {
+  return keyString(inst.keys) || inst.url_path || inst.path || String(inst.id);
+}
+
 interface Props {
   urlPath: string | null;
   treeNode: TreeNode | null;
@@ -77,6 +88,12 @@ export function AssetListView({
         }
       }
       if (cancelled || seq !== seqRef.current) return;
+      all.sort((a, b) =>
+        instanceSortKey(a).localeCompare(instanceSortKey(b), undefined, {
+          numeric: true,
+          sensitivity: "base",
+        }),
+      );
       setInstances(all);
       setLoading(false);
     })();
