@@ -1,5 +1,7 @@
 """Tests for StaticAsset discovery and instance access."""
 
+import time
+
 import storyt as st
 
 
@@ -262,3 +264,48 @@ def test_template_missing_ancestor_is_silently_skipped(tmp_path):
     root.discover()  # should not raise
 
     assert bad.instances() == []
+
+
+def test_discover_persistence_and_timestamps(tmp_path):
+    # Setup: create root and children
+    (tmp_path / "sim1").mkdir()
+    (tmp_path / "sim2").mkdir()
+    root = st.StaticAsset(path=str(tmp_path), name="root")
+    sim = root.add_children(path=["sim1", "sim2"], name="sim")
+    # First discover
+    root.discover()
+    instances1 = sim.instances()
+    assert len(instances1) == 2
+    # Save mtimes
+    mtimes = {i.path.name: i.path.stat().st_mtime for i in instances1}
+    # Close and reload asset tree (simulate new session)
+    root2 = st.StaticAsset(path=str(tmp_path), name="root")
+    sim2 = root2.add_children(path=["sim1", "sim2"], name="sim")
+    # Discover again (should not rescan if unchanged)
+    _t0 = time.time()
+    root2.discover()
+    instances2 = sim2.instances()
+    assert len(instances2) == 2
+    # mtimes should be unchanged
+    for i in instances2:
+        assert abs(i.path.stat().st_mtime - mtimes[i.path.name]) < 1
+    # Touch one dir to update mtime
+    time.sleep(1.1)
+    (tmp_path / "sim1").touch()
+    new_mtime = (tmp_path / "sim1").stat().st_mtime
+    assert new_mtime > mtimes["sim1"]
+    # Discover again (should rescan sim1 only)
+    root2.discover()
+    instances3 = sim2.instances()
+    assert len(instances3) == 2
+    # sim1 instance should have updated mtime
+    sim1_inst = [i for i in instances3 if i.path.name == "sim1"][0]
+    assert abs(sim1_inst.path.stat().st_mtime - new_mtime) < 1
+    # Discover with force=True (should rescan all)
+    time.sleep(1.1)
+    root2.discover(force=True)
+    instances4 = sim2.instances()
+    assert len(instances4) == 2
+    # All mtimes should be current
+    for i in instances4:
+        assert abs(i.path.stat().st_mtime - i.path.stat().st_mtime) < 1

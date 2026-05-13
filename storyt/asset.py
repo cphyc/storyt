@@ -319,6 +319,7 @@ class StaticAsset:
         self,
         _parent_instances: list[dict] | None = None,
         _ancestry_contexts: list[dict[str, dict]] | None = None,
+        force: bool = False,
     ):
         """Scan the filesystem and populate the DB with instances.
 
@@ -326,7 +327,10 @@ class StaticAsset:
         each entry maps asset *name* → raw instance dict for every ancestor of
         the corresponding parent instance.  This context is used to resolve
         ``${name.path}`` placeholders in ``re=`` patterns.
+        If force is True, always rescan and update timestamps.
         """
+        import time
+
         depth = 0 if _parent_instances is None else self._depth()
         indent = "  " * depth
         asset_id = self._ensure_registered()
@@ -341,7 +345,14 @@ class StaticAsset:
         if _parent_instances is None:
             # Root asset: create a single instance at the root path
             root_path = self._get_root_path()
-            self._db.register_instance(asset_id, str(root_path), {}, None)
+            mtime = (
+                int(root_path.stat().st_mtime)
+                if root_path.exists()
+                else int(time.time())
+            )
+            self._db.register_instance(
+                asset_id, str(root_path), {}, None, timestamp=mtime
+            )
             logger.debug("%sdiscover[%s] root instance registered", indent, self.name)
             my_instances = self._db.get_instances(asset_id, {})
             logger.debug(
@@ -371,11 +382,38 @@ class StaticAsset:
             ):
                 parent_path = Path(parent_inst["path"]) if parent_inst["path"] else None
                 parent_db_id = parent_inst["id"]
+                # Check DB for existing instance and timestamp
+                if parent_path and parent_path.exists():
+                    mtime = int(parent_path.stat().st_mtime)
+                else:
+                    mtime = int(time.time())
+                # If not force, check DB timestamp
+                skip = False
+                if not force:
+                    rows = self._db.get_instances(asset_id, {})
+                    for row in rows:
+                        if row["parent_id"] == parent_db_id and row["path"] == str(
+                            parent_path
+                        ):
+                            dbts = row.get("timestamp")
+                            if dbts is not None and dbts >= mtime:
+                                skip = True
+                                break
+                if skip:
+                    logger.debug(
+                        "%sdiscover[%s] skipping unchanged instance %s",
+                        indent,
+                        self.name,
+                        parent_path,
+                    )
+                    continue
                 self._create_instances_for_parent(
                     parent_path,
                     parent_db_id,
                     ancestry_ctx,
                     _depth=depth + 1,
+                    _mtime=mtime,
+                    _force=force,
                 )
             logger.debug(
                 "%sdiscover[%s] parent scans=%d",
@@ -415,6 +453,7 @@ class StaticAsset:
             child.discover(
                 _parent_instances=my_instances,
                 _ancestry_contexts=my_contexts,
+                force=force,
             )
 
         # Register bindings only at the root level (after full tree traversal)
@@ -439,6 +478,8 @@ class StaticAsset:
         ancestry_context: dict[str, dict] | None = None,
         *,
         _depth: int = 0,
+        _mtime: int | None = None,
+        _force: bool = False,
     ):
         indent = "  " * _depth
         asset_id = self._ensure_registered()
@@ -449,7 +490,9 @@ class StaticAsset:
                     data = self._parent._reader(parent_path)
                     for key_val, _item in self._generator(data):  # type: ignore[misc]
                         keys = {self._generator_key: str(key_val)}  # type: ignore[index]
-                        self._db.register_instance(asset_id, None, keys, parent_db_id)
+                        self._db.register_instance(
+                            asset_id, None, keys, parent_db_id, timestamp=_mtime
+                        )
                         created += 1
                     logger.debug(
                         "%sdynamic[%s] parent_id=%d created=%d",
@@ -492,6 +535,7 @@ class StaticAsset:
                             parent_db_id,
                             pattern,
                             _depth=_depth,
+                            _force=_force,
                         )
                     else:
                         logger.warning(
@@ -512,6 +556,7 @@ class StaticAsset:
                             parent_db_id,
                             pattern,
                             _depth=_depth,
+                            _force=_force,
                         )
             else:
                 if (
@@ -523,13 +568,17 @@ class StaticAsset:
                         parent_path,
                         parent_db_id,
                         _depth=_depth,
+                        _force=_force,
                     )
 
         elif self._fixed_paths is not None:
             base = parent_path if parent_path is not None else self._get_root_path()
             for rel in self._fixed_paths:
                 full_path = base / rel
-                self._db.register_instance(asset_id, str(full_path), {}, parent_db_id)
+                mtime = int(full_path.stat().st_mtime) if full_path.exists() else None
+                self._db.register_instance(
+                    asset_id, str(full_path), {}, parent_db_id, timestamp=mtime
+                )
             logger.debug(
                 "%sfixed[%s] parent_id=%d created=%d",
                 indent,
@@ -545,21 +594,61 @@ class StaticAsset:
         pattern: str | None = None,
         *,
         _depth: int = 0,
+        _force: bool = False,
     ):
+        import time
+
         indent = "  " * _depth
         asset_id = self._ensure_registered()
         pattern = pattern if pattern is not None else self._re_pattern
         assert pattern is not None
 
         components = [component for component in pattern.split("/") if component]
-        scanned, matched = _scan_component_path(
-            self,
-            parent_path,
-            components,
-            parent_db_id,
-            asset_id,
-        )
-
+        scanned = 0
+        matched = 0
+        try:
+            entries = list(parent_path.iterdir())
+        except (NotADirectoryError, PermissionError):
+            logger.warning("%sscan[%s] cannot list %s", indent, self.name, parent_path)
+            return
+        for entry in entries:
+            # Only scan if force or file is new/modified
+            mtime = int(entry.stat().st_mtime) if entry.exists() else int(time.time())
+            skip = False
+            if not _force:
+                rows = self._db.get_instances(asset_id, {})
+                for row in rows:
+                    if row["parent_id"] == parent_db_id and row["path"] == str(entry):
+                        dbts = row.get("timestamp")
+                        if dbts is not None and dbts >= mtime:
+                            skip = True
+                            break
+            if skip:
+                logger.debug(
+                    "%sscan[%s] skipping unchanged %s", indent, self.name, entry
+                )
+                continue
+            # Match pattern
+            is_match, extracted = _match_path_component(components[0], entry.name)
+            if not is_match:
+                continue
+            next_keys = dict(extracted)
+            if len(components) > 1 and entry.is_dir():
+                # Recurse
+                sub_pattern = "/".join(components[1:])
+                self._scan_for_pattern(
+                    entry,
+                    parent_db_id,
+                    sub_pattern,
+                    _depth=_depth + 1,
+                    _force=_force,
+                )
+            else:
+                self._db.register_instance(
+                    asset_id, str(entry), next_keys, parent_db_id, timestamp=mtime
+                )
+                matched += 1
+            scanned += 1
         logger.debug(
             "%sscan[%s] parent_id=%d scanned=%d matched=%d",
             indent,
