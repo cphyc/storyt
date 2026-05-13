@@ -1,11 +1,14 @@
 """Fluent query API for traversing and materialising asset hierarchies."""
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from .asset import StaticAsset
     from .instance import AssetInstance
 
@@ -14,7 +17,8 @@ if TYPE_CHECKING:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _topo_sort_props(asset: "StaticAsset", requested: tuple[str, ...]) -> list[str]:
+
+def _topo_sort_props(asset: StaticAsset, requested: tuple[str, ...]) -> list[str]:
     """Return property names in dependency order (dependencies first).
 
     Raises RuntimeError on circular dependencies.
@@ -43,14 +47,15 @@ def _topo_sort_props(asset: "StaticAsset", requested: tuple[str, ...]) -> list[s
     return order
 
 
-def _make_instance(asset: "StaticAsset", row: dict) -> "AssetInstance":
+def _make_instance(asset: StaticAsset, row: dict) -> AssetInstance:
     from .instance import AssetInstance
+
     keys = json.loads(row["keys"]) if isinstance(row["keys"], str) else row["keys"]
     path = Path(row["path"]) if row["path"] else None
     return AssetInstance(asset, row["id"], path, keys, row.get("parent_id"))
 
 
-def _compute_prop_cached(instance: "AssetInstance", prop, dep_values: tuple = ()):
+def _compute_prop_cached(instance: AssetInstance, prop, dep_values: tuple = ()):
     """Compute one property (with cache check/store). Safe to call from threads."""
     from . import serializers
 
@@ -65,7 +70,12 @@ def _compute_prop_cached(instance: "AssetInstance", prop, dep_values: tuple = ()
         return serializers.deserialize(prop.serializer, cached)
 
     value = prop.compute(instance, dep_values)
-    db.set_cached_property(prop_id, instance.db_id, serializers.serialize(prop.serializer, value), source_hash)
+    db.set_cached_property(
+        prop_id,
+        instance.db_id,
+        serializers.serialize(prop.serializer, value),
+        source_hash,
+    )
     return value
 
 
@@ -73,10 +83,11 @@ def _compute_prop_cached(instance: "AssetInstance", prop, dep_values: tuple = ()
 # Query class
 # ---------------------------------------------------------------------------
 
+
 class Query:
     """A lazy, chainable view over a set of AssetInstances."""
 
-    def __init__(self, asset: "StaticAsset", instances: list["AssetInstance"]):
+    def __init__(self, asset: StaticAsset, instances: list[AssetInstance]):
         self._asset = asset
         self._instances = instances
 
@@ -84,11 +95,11 @@ class Query:
     # Traversal
     # ------------------------------------------------------------------
 
-    def all(self) -> "Query":
+    def all(self) -> Query:
         """Return self (all instances are already included)."""
         return self
 
-    def __getattr__(self, name: str) -> "Query":
+    def __getattr__(self, name: str) -> Query:
         """Chain to a related asset type by name."""
         if name.startswith("_"):
             raise AttributeError(name)
@@ -98,14 +109,13 @@ class Query:
         while root._parent is not None:
             root = root._parent
         from .instance import _search_asset
+
         target = _search_asset(root, name)
         if target is None or target._db_id is None:
-            raise AttributeError(
-                f"No discovered asset named {name!r} in hierarchy"
-            )
+            raise AttributeError(f"No discovered asset named {name!r} in hierarchy")
 
         db = self._asset._db
-        related: list["AssetInstance"] = []
+        related: list[AssetInstance] = []
         seen_ids: set[int] = set()
 
         for inst in self._instances:
@@ -126,7 +136,7 @@ class Query:
     # Filtering
     # ------------------------------------------------------------------
 
-    def query(self, predicate: Callable[["AssetInstance"], bool]) -> "Query":
+    def query(self, predicate: Callable[[AssetInstance], bool]) -> Query:
         """Filter instances by a predicate.
 
         The predicate receives an AssetInstance; property access on it is
@@ -148,8 +158,8 @@ class Query:
             return []
 
         try:
-            import dask
-            from dask import delayed, compute as dask_compute
+            from dask import compute as dask_compute, delayed
+
             return self._get_dask(prop_names, delayed, dask_compute)
         except ImportError:
             return self._get_sequential(prop_names)
@@ -157,7 +167,10 @@ class Query:
     def _get_sequential(self, prop_names: tuple[str, ...]) -> list[dict]:
         result = []
         for inst in self._instances:
-            row: dict = {"path": str(inst.path) if inst.path else None, "keys": inst.keys}
+            row: dict = {
+                "path": str(inst.path) if inst.path else None,
+                "keys": inst.keys,
+            }
             topo = _topo_sort_props(inst.asset, prop_names)
             computed: dict[str, object] = {}
             for pname in topo:
@@ -171,10 +184,12 @@ class Query:
             result.append(row)
         return result
 
-    def _get_dask(self, prop_names: tuple[str, ...], delayed, dask_compute) -> list[dict]:
+    def _get_dask(
+        self, prop_names: tuple[str, ...], delayed, dask_compute
+    ) -> list[dict]:
         all_delayed: list = []
         # (inst, ordered prop names whose delayed values are in all_delayed)
-        structure: list[tuple["AssetInstance", list[str]]] = []
+        structure: list[tuple[AssetInstance, list[str]]] = []
 
         for inst in self._instances:
             topo = _topo_sort_props(inst.asset, prop_names)
@@ -201,7 +216,10 @@ class Query:
         result = []
         idx = 0
         for inst, requested in structure:
-            row: dict = {"path": str(inst.path) if inst.path else None, "keys": inst.keys}
+            row: dict = {
+                "path": str(inst.path) if inst.path else None,
+                "keys": inst.keys,
+            }
             for pname in requested:
                 row[pname] = computed[idx]
                 idx += 1

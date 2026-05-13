@@ -1,6 +1,6 @@
-import pickle
 import json as json_mod
-from typing import Callable
+import pickle
+from collections.abc import Callable
 
 _registry: dict[str, tuple[Callable, Callable]] = {}
 

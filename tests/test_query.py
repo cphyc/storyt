@@ -1,11 +1,13 @@
 """Tests for the fluent Query API, property dependencies, and dask scheduling."""
-import pytest
-import storyt as st
 
+import pytest
+
+import storyt as st
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def simple_hierarchy(tmp_path):
@@ -32,6 +34,7 @@ def simple_hierarchy(tmp_path):
 # Fluent traversal
 # ---------------------------------------------------------------------------
 
+
 def test_asset_getattr_returns_child(tmp_path):
     root = st.StaticAsset(path=str(tmp_path), name="root")
     sim = root.add_children(path=["sim"], name="sim")
@@ -52,6 +55,7 @@ def test_all_returns_query(tmp_path):
 
     q = output.all()
     from storyt.query import Query
+
     assert isinstance(q, Query)
     assert len(q._instances) == 1
 
@@ -72,6 +76,7 @@ def test_all_is_idempotent(simple_hierarchy):
 # ---------------------------------------------------------------------------
 # .query() filter
 # ---------------------------------------------------------------------------
+
 
 def test_query_filter_by_key(simple_hierarchy):
     root, sim, output = simple_hierarchy
@@ -101,6 +106,7 @@ def test_query_filter_with_property(simple_hierarchy):
 # .get() — simple (sequential)
 # ---------------------------------------------------------------------------
 
+
 def test_get_returns_list_of_dicts(simple_hierarchy):
     root, sim, output = simple_hierarchy
     output.add_property("iout_val", lambda inst: inst.keys["iout"])
@@ -125,6 +131,7 @@ def test_get_values_are_correct(simple_hierarchy):
 # ---------------------------------------------------------------------------
 # Property dependencies (requires=)
 # ---------------------------------------------------------------------------
+
 
 def test_requires_simple(simple_hierarchy):
     root, sim, output = simple_hierarchy
@@ -195,6 +202,7 @@ def test_circular_dependency_raises(simple_hierarchy):
 # ---------------------------------------------------------------------------
 # .get() with chained traversal
 # ---------------------------------------------------------------------------
+
 
 def test_get_after_chain(simple_hierarchy):
     root, sim, output = simple_hierarchy

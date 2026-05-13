@@ -1,5 +1,5 @@
 """Tests for StaticAsset discovery and instance access."""
-import pytest
+
 import storyt as st
 
 

@@ -1,5 +1,7 @@
 """Tests for bind() and instance.bound()."""
+
 import pytest
+
 import storyt as st
 
 
@@ -15,6 +17,7 @@ def make_root(tmp_path):
         output = root.add_children(re=r"output_(?P<iout>\d{5})", name="output")
         cutout = root.add_children(re=r"cutout_(?P<iout>\d{5})", name="cutout")
         return root, output, cutout
+
     return _factory
 
 

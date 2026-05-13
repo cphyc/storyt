@@ -1,6 +1,7 @@
-import inspect
 import hashlib
-from typing import Callable, Any
+import inspect
+from collections.abc import Callable
+from typing import Any
 
 
 class Property:
@@ -22,11 +23,7 @@ class Property:
         except (OSError, TypeError):
             try:
                 code = self.fn.__code__
-                src = (
-                    str(code.co_consts)
-                    + str(code.co_varnames)
-                    + str(code.co_code)
-                )
+                src = str(code.co_consts) + str(code.co_varnames) + str(code.co_code)
             except AttributeError:
                 src = str(id(self.fn))
         return hashlib.sha256(src.encode()).hexdigest()

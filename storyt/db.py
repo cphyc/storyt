@@ -1,9 +1,8 @@
-import sqlite3
-import json
 import hashlib
+import json
+import sqlite3
 import threading
 from pathlib import Path
-from typing import Optional
 
 
 class Database:
@@ -81,7 +80,7 @@ class Database:
         self.conn.commit()
 
     def register_asset_type(
-        self, name: str, pattern: Optional[str], is_dynamic: bool, hash_: str
+        self, name: str, pattern: str | None, is_dynamic: bool, hash_: str
     ) -> int:
         with self._lock:
             self.conn.execute(
@@ -105,9 +104,9 @@ class Database:
     def register_instance(
         self,
         object_id: int,
-        path: Optional[str],
+        path: str | None,
         keys: dict,
-        parent_id: Optional[int],
+        parent_id: int | None,
     ) -> int:
         keys_json = json.dumps(keys, sort_keys=True)
 
@@ -163,7 +162,7 @@ class Database:
 
     def get_cached_property(
         self, property_id: int, instance_id: int, current_hash: str
-    ) -> Optional[bytes]:
+    ) -> bytes | None:
         row = self.conn.execute(
             "SELECT data, property_hash FROM object_data "
             "WHERE obj_property_id = ? AND obj_instance_id = ?",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .asset import StaticAsset
@@ -11,11 +11,11 @@ if TYPE_CHECKING:
 class AssetInstance:
     def __init__(
         self,
-        asset: "StaticAsset",
+        asset: StaticAsset,
         db_id: int,
-        path: Optional[Path],
+        path: Path | None,
         keys: dict,
-        parent_id: Optional[int],
+        parent_id: int | None,
     ):
         self.asset = asset
         self.db_id = db_id
@@ -29,16 +29,14 @@ class AssetInstance:
 
     def load(self):
         if self.asset._reader is None:
-            raise RuntimeError(
-                f"No reader defined for asset '{self.asset.name}'"
-            )
+            raise RuntimeError(f"No reader defined for asset '{self.asset.name}'")
         return self.asset._reader(self.path)
 
     # ------------------------------------------------------------------
     # Binding resolution
     # ------------------------------------------------------------------
 
-    def bound(self, name: str) -> list["AssetInstance"]:
+    def bound(self, name: str) -> list[AssetInstance]:
         """Return instances of the named asset type bound to this instance."""
         target_asset = self._find_asset_by_name(name)
         if target_asset is None or target_asset._db_id is None:
@@ -48,9 +46,7 @@ class AssetInstance:
         result = []
         for row in rows:
             keys = (
-                json.loads(row["keys"])
-                if isinstance(row["keys"], str)
-                else row["keys"]
+                json.loads(row["keys"]) if isinstance(row["keys"], str) else row["keys"]
             )
             path = Path(row["path"]) if row["path"] else None
             result.append(
@@ -58,7 +54,7 @@ class AssetInstance:
             )
         return result
 
-    def _find_asset_by_name(self, name: str) -> Optional["StaticAsset"]:
+    def _find_asset_by_name(self, name: str) -> StaticAsset | None:
         # Walk up to root, then search the whole tree
         root = self.asset
         while root._parent is not None:
@@ -77,8 +73,8 @@ class AssetInstance:
         try:
             asset = object.__getattribute__(self, "asset")
             properties = asset._properties
-        except AttributeError:
-            raise AttributeError(name)
+        except AttributeError as err:
+            raise AttributeError(name) from err
 
         if name not in properties:
             raise AttributeError(
@@ -100,6 +96,7 @@ class AssetInstance:
         cached = db.get_cached_property(prop_id, inst_id, source_hash)
         if cached is not None:
             from . import serializers
+
             return serializers.deserialize(prop.serializer, cached)
 
         # Resolve dependencies first (recursive, each dep is also cached)
@@ -108,6 +105,7 @@ class AssetInstance:
         value = prop.compute(self, dep_values)
 
         from . import serializers
+
         data = serializers.serialize(prop.serializer, value)
         db.set_cached_property(prop_id, inst_id, data, source_hash)
 
@@ -120,7 +118,7 @@ class AssetInstance:
         )
 
 
-def _search_asset(asset: "StaticAsset", name: str) -> Optional["StaticAsset"]:
+def _search_asset(asset: StaticAsset, name: str) -> StaticAsset | None:
     if asset.name == name:
         return asset
     for child in asset._children:

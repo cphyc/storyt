@@ -1,11 +1,12 @@
 from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .asset import StaticAsset
 
 
-def bind(*members: tuple["StaticAsset", str]):
+def bind(*members: tuple[StaticAsset, str]):
     """
     Bind assets together on shared key names.
 

@@ -1,5 +1,7 @@
 """Tests for property registration, computation, and caching."""
+
 import pytest
+
 import storyt as st
 from storyt.property_ import Property
 

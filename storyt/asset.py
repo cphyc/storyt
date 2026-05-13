@@ -4,7 +4,12 @@ import hashlib
 import json
 import re as re_module
 from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from .query import Query
 
 from .db import Database
 from .property_ import Property
@@ -14,15 +19,15 @@ class StaticAsset:
     def __init__(
         self,
         *,
-        path: Optional[str | Path] = None,
+        path: str | Path | None = None,
         name: str,
-        _db: Optional[Database] = None,
-        _parent: Optional["StaticAsset"] = None,
-        _re_pattern: Optional[str] = None,
+        _db: Database | None = None,
+        _parent: StaticAsset | None = None,
+        _re_pattern: str | None = None,
         _is_dynamic: bool = False,
-        _generator: Optional[Callable] = None,
-        _generator_key: Optional[str] = None,
-        _fixed_paths: Optional[list[str]] = None,
+        _generator: Callable | None = None,
+        _generator_key: str | None = None,
+        _fixed_paths: list[str] | None = None,
     ):
         self.name = name
         self._parent = _parent
@@ -31,12 +36,12 @@ class StaticAsset:
         self._generator = _generator
         self._generator_key = _generator_key
         self._fixed_paths = _fixed_paths
-        self._children: list["StaticAsset"] = []
-        self._reader: Optional[Callable] = None
+        self._children: list[StaticAsset] = []
+        self._reader: Callable | None = None
         self._properties: dict[str, Property] = {}
-        self._bindings: list[list[tuple["StaticAsset", str]]] = []
-        self._db_id: Optional[int] = None
-        self._root_path: Optional[Path] = None
+        self._bindings: list[list[tuple[StaticAsset, str]]] = []
+        self._db_id: int | None = None
+        self._root_path: Path | None = None
 
         if path is not None:
             self._root_path = Path(path).resolve()
@@ -77,11 +82,11 @@ class StaticAsset:
     def add_children(
         self,
         *args,
-        re: Optional[str] = None,
-        path: Optional[str | list[str]] = None,
+        re: str | None = None,
+        path: str | list[str] | None = None,
         name: str,
-        key: Optional[str] = None,
-    ) -> "StaticAsset":
+        key: str | None = None,
+    ) -> StaticAsset:
         if args and callable(args[0]):
             child = StaticAsset(
                 name=name,
@@ -118,40 +123,47 @@ class StaticAsset:
         self._reader = fn
         return fn
 
-    def add_property(self, name: str, fn=None, requires=None, serializer: str = "pickle"):
+    def add_property(
+        self, name: str, fn=None, requires=None, serializer: str = "pickle"
+    ):
         """Register a computed property (can be used as a decorator)."""
         if fn is None:
-            def decorator(f: Callable) -> Callable:
-                self._properties[name] = Property(name, f, serializer=serializer, requires=requires)
-                return f
-            return decorator
-        self._properties[name] = Property(name, fn, serializer=serializer, requires=requires)
 
-    def all(self) -> "Query":
+            def decorator(f: Callable) -> Callable:
+                self._properties[name] = Property(
+                    name, f, serializer=serializer, requires=requires
+                )
+                return f
+
+            return decorator
+        self._properties[name] = Property(
+            name, fn, serializer=serializer, requires=requires
+        )
+
+    def all(self) -> Query:
         """Return a Query over all instances of this asset."""
         from .query import Query
+
         return Query(self, self.instances())
 
-    def __getattr__(self, name: str) -> "StaticAsset":
+    def __getattr__(self, name: str) -> StaticAsset:
         """Allow attribute-style access to child assets by name."""
         if name.startswith("_"):
             raise AttributeError(name)
         try:
             children = object.__getattribute__(self, "_children")
-        except AttributeError:
-            raise AttributeError(name)
+        except AttributeError as err:
+            raise AttributeError(name) from err
         for child in children:
             if child.name == name:
                 return child
-        raise AttributeError(
-            f"StaticAsset {self.name!r} has no child named {name!r}"
-        )
+        raise AttributeError(f"StaticAsset {self.name!r} has no child named {name!r}")
 
     # ------------------------------------------------------------------
     # Discovery
     # ------------------------------------------------------------------
 
-    def discover(self, _parent_instances: Optional[list[dict]] = None):
+    def discover(self, _parent_instances: list[dict] | None = None):
         """Scan the filesystem and populate the DB with instances."""
         self._ensure_registered()
 
@@ -167,9 +179,7 @@ class StaticAsset:
             my_instances = []
         else:
             for parent_inst in _parent_instances:
-                parent_path = (
-                    Path(parent_inst["path"]) if parent_inst["path"] else None
-                )
+                parent_path = Path(parent_inst["path"]) if parent_inst["path"] else None
                 parent_db_id = parent_inst["id"]
                 self._create_instances_for_parent(parent_path, parent_db_id)
             my_instances = self._db.get_instances(self._db_id, {})
@@ -185,7 +195,7 @@ class StaticAsset:
             self._collect_and_register_bindings(set())
 
     def _create_instances_for_parent(
-        self, parent_path: Optional[Path], parent_db_id: int
+        self, parent_path: Path | None, parent_db_id: int
     ):
         if self._is_dynamic:
             if self._parent and self._parent._reader and parent_path:
@@ -200,7 +210,11 @@ class StaticAsset:
                     pass
 
         elif self._re_pattern is not None:
-            if parent_path is not None and parent_path.exists() and parent_path.is_dir():
+            if (
+                parent_path is not None
+                and parent_path.exists()
+                and parent_path.is_dir()
+            ):
                 self._scan_for_pattern(parent_path, parent_db_id)
 
         elif self._fixed_paths is not None:
@@ -224,9 +238,7 @@ class StaticAsset:
                         m = re_module.fullmatch(pattern, rel)
                         if m:
                             keys = {
-                                k: v
-                                for k, v in m.groupdict().items()
-                                if v is not None
+                                k: v for k, v in m.groupdict().items() if v is not None
                             }
                             self._db.register_instance(
                                 self._db_id, str(entry), keys, parent_db_id
@@ -240,11 +252,7 @@ class StaticAsset:
                 for entry in parent_path.iterdir():
                     m = re_module.fullmatch(pattern, entry.name)
                     if m:
-                        keys = {
-                            k: v
-                            for k, v in m.groupdict().items()
-                            if v is not None
-                        }
+                        keys = {k: v for k, v in m.groupdict().items() if v is not None}
                         self._db.register_instance(
                             self._db_id, str(entry), keys, parent_db_id
                         )
@@ -255,9 +263,7 @@ class StaticAsset:
         """Walk the tree, deduplicate, and register all pending bindings."""
         for binding in self._bindings:
             # Canonical key: frozenset of (asset_hash, key_name) pairs
-            key = frozenset(
-                (asset._compute_hash(), kname) for asset, kname in binding
-            )
+            key = frozenset((asset._compute_hash(), kname) for asset, kname in binding)
             if key not in registered:
                 registered.add(key)
                 members = [
@@ -281,9 +287,7 @@ class StaticAsset:
         result = []
         for row in rows:
             keys = (
-                json.loads(row["keys"])
-                if isinstance(row["keys"], str)
-                else row["keys"]
+                json.loads(row["keys"]) if isinstance(row["keys"], str) else row["keys"]
             )
             path = Path(row["path"]) if row["path"] else None
             result.append(
