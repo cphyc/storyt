@@ -1,9 +1,10 @@
 """
-storit example — self-contained demo using a dummy simulation tree.
+storyt example — self-contained demo using a dummy simulation tree.
 
 Run with:
     python example.py
 """
+
 import pathlib
 import tempfile
 
@@ -11,10 +12,10 @@ import numpy as np
 
 import storyt as st
 
-
 # ---------------------------------------------------------------------------
 # 1.  Build a dummy directory/file structure
 # ---------------------------------------------------------------------------
+
 
 def create_dummy_project(base: pathlib.Path) -> None:
     """
@@ -33,7 +34,7 @@ def create_dummy_project(base: pathlib.Path) -> None:
     """
     sims = {
         "MEGATRON_CP_NEW": ["00001", "00002", "00003"],
-        "MEGATRON_ISM":    ["00001", "00002"],
+        "MEGATRON_ISM": ["00001", "00002"],
     }
     halo_ids = ["0001", "0002"]
 
@@ -54,7 +55,11 @@ def create_dummy_project(base: pathlib.Path) -> None:
 
             for hid in halo_ids:
                 cutout = (
-                    base / sim / "halo_cutouts" / f"output_{iout}" / f"halo_{hid}_gas.bin"
+                    base
+                    / sim
+                    / "halo_cutouts"
+                    / f"output_{iout}"
+                    / f"halo_{hid}_gas.bin"
                 )
                 cutout.parent.mkdir(parents=True, exist_ok=True)
                 cutout.write_bytes(
@@ -66,13 +71,16 @@ def create_dummy_project(base: pathlib.Path) -> None:
 # 2.  Dummy data models (stand-ins for yt / pandas)
 # ---------------------------------------------------------------------------
 
+
 class FakeCatalogue:
     """Minimal stand-in for a pandas DataFrame loaded from CSV."""
 
     def __init__(self, path: pathlib.Path):
         lines = path.read_text().splitlines()
         header = lines[0].split(",")
-        self._rows = [dict(zip(header, ln.split(","))) for ln in lines[1:] if ln]
+        self._rows = [
+            dict(zip(header, ln.split(","), strict=False)) for ln in lines[1:] if ln
+        ]
 
     def iterrows(self):
         for row in self._rows:
@@ -98,7 +106,7 @@ class FakeCutout:
 # 3.  Define the asset hierarchy
 # ---------------------------------------------------------------------------
 
-with tempfile.TemporaryDirectory(prefix="storit_example_") as tmpdir:
+with tempfile.TemporaryDirectory(prefix="storyt_example_") as tmpdir:
     base = pathlib.Path(tmpdir)
     create_dummy_project(base)
 
@@ -139,7 +147,7 @@ with tempfile.TemporaryDirectory(prefix="storit_example_") as tmpdir:
     # 4.  Register properties
     # ---------------------------------------------------------------------------
 
-    cutout.add_property("total_gas_mass",     lambda c: c.load().gas_mass)
+    cutout.add_property("total_gas_mass", lambda c: c.load().gas_mass)
     cutout.add_property("total_stellar_mass", lambda c: c.load().stellar_mass)
 
     @cutout.add_property("SFR")
@@ -148,8 +156,9 @@ with tempfile.TemporaryDirectory(prefix="storit_example_") as tmpdir:
         counts, edges = np.histogram(data, bins=np.linspace(0, 10, 5))
         return counts.tolist()
 
-    @cutout.add_property("gas_to_star_ratio",
-                         requires=["total_gas_mass", "total_stellar_mass"])
+    @cutout.add_property(
+        "gas_to_star_ratio", requires=["total_gas_mass", "total_stellar_mass"]
+    )
     def _ratio(c, gas_mass, stellar_mass):
         return gas_mass / stellar_mass
 
@@ -174,18 +183,13 @@ with tempfile.TemporaryDirectory(prefix="storit_example_") as tmpdir:
 
     # All cutouts from MEGATRON_CP_NEW (3 iouts × 2 halos = 6)
     cp_cutouts = (
-        sim.all()
-        .query(lambda s: "CP_NEW" in str(s.path))
-        .cutout_folder.all()
-        .cutout
+        sim.all().query(lambda s: "CP_NEW" in str(s.path)).cutout_folder.all().cutout
     )
     print(f"  MEGATRON_CP_NEW cutouts : {len(cp_cutouts._instances)}")
 
     # Only iout=00001 across both sims (2 sims × 2 halos = 4)
     iout1_cutouts = (
-        cutout_folder.all()
-        .query(lambda cf: cf.keys["iout"] == "00001")
-        .cutout
+        cutout_folder.all().query(lambda cf: cf.keys["iout"] == "00001").cutout
     )
     print(f"  iout=00001 cutouts      : {len(iout1_cutouts._instances)}")
 
@@ -193,7 +197,9 @@ with tempfile.TemporaryDirectory(prefix="storit_example_") as tmpdir:
     #   sim.output.all().cutout_folder.all().cutout.all()
     #       .get("SFR", "total_gas_mass", "total_stellar_mass")
     print("\n=== .get() over iout=00001 cutouts ===")
-    rows = iout1_cutouts.get("total_gas_mass", "total_stellar_mass", "gas_to_star_ratio")
+    rows = iout1_cutouts.get(
+        "total_gas_mass", "total_stellar_mass", "gas_to_star_ratio"
+    )
     for row in rows:
         print(
             f"  halo_id={row['keys']['halo_id']}"

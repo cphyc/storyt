@@ -1,0 +1,79 @@
+body {
+  font-family: sans-serif;
+  margin: 0;
+  padding: 16px;
+  background: #fafafa;
+}
+.breadcrumb {
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+.breadcrumb span.label {
+  cursor: pointer;
+  color: #0066cc;
+}
+.breadcrumb span.label:hover {
+  text-decoration: underline;
+}
+.breadcrumb span.sep {
+  color: #999;
+  margin: 0 4px;
+}
+.card {
+  border: 1px solid #ddd;
+  padding: 10px 14px;
+  margin: 6px 0;
+  border-radius: 4px;
+  background: white;
+}
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.nav-link {
+  color: #0066cc;
+  cursor: pointer;
+  text-decoration: underline;
+  font-weight: bold;
+}
+.key-display {
+  font-family: monospace;
+  font-size: 13px;
+  font-weight: bold;
+}
+.sibling-section {
+  margin-top: 8px;
+  padding: 6px 10px;
+  background: #f5f5f5;
+  border-radius: 3px;
+  font-size: 13px;
+}
+.sibling-name {
+  font-weight: bold;
+}
+button {
+  cursor: pointer;
+  padding: 3px 10px;
+  font-size: 12px;
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-top: 8px;
+  font-size: 13px;
+}
+th,
+td {
+  border: 1px solid #ddd;
+  padding: 5px 10px;
+  text-align: left;
+}
+th {
+  background: #f0f0f0;
+}
+.loading {
+  color: #888;
+  font-style: italic;
+}

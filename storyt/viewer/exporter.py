@@ -364,8 +364,21 @@ def export_db(db: Database, output_dir: Path | str, root_path: Path | str) -> No
         session.close()
 
     # ------------------------------------------------------------------ #
-    # Copy frontend index.html if it exists                                #
+    # Copy built frontend dist/ if it exists; warn otherwise               #
     # ------------------------------------------------------------------ #
-    frontend_html = Path(__file__).parent / "frontend" / "index.html"
-    if frontend_html.exists():
-        shutil.copy(frontend_html, output_dir / "index.html")
+    frontend_dist = Path(__file__).parent / "frontend" / "dist"
+    if frontend_dist.exists():
+        for item in frontend_dist.iterdir():
+            dest = output_dir / item.name
+            if item.is_dir():
+                shutil.copytree(item, dest, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, dest)
+    else:
+        import warnings
+
+        warnings.warn(
+            "storyt viewer frontend not built. "
+            "Run `npm run build` in storyt/viewer/frontend/ first.",
+            stacklevel=2,
+        )
