@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from dask import compute as dask_compute, delayed
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -152,41 +154,13 @@ class Query:
         """Compute properties for all instances and return a flat list of dicts.
 
         Each dict has ``path``, ``keys``, and one key per requested property.
-        Uses dask for scheduling if available, otherwise falls back to sequential.
+        Uses dask to schedule computations respecting property dependencies.
         """
         if not self._instances:
             return []
+        return self._get_dask(prop_names)
 
-        try:
-            from dask import compute as dask_compute, delayed
-
-            return self._get_dask(prop_names, delayed, dask_compute)
-        except ImportError:
-            return self._get_sequential(prop_names)
-
-    def _get_sequential(self, prop_names: tuple[str, ...]) -> list[dict]:
-        result = []
-        for inst in self._instances:
-            row: dict = {
-                "path": str(inst.path) if inst.path else None,
-                "keys": inst.keys,
-            }
-            topo = _topo_sort_props(inst.asset, prop_names)
-            computed: dict[str, object] = {}
-            for pname in topo:
-                prop = inst.asset._properties.get(pname)
-                if prop is None:
-                    continue
-                dep_values = tuple(computed[d] for d in prop.requires)
-                computed[pname] = _compute_prop_cached(inst, prop, dep_values)
-            for pname in prop_names:
-                row[pname] = computed.get(pname)
-            result.append(row)
-        return result
-
-    def _get_dask(
-        self, prop_names: tuple[str, ...], delayed, dask_compute
-    ) -> list[dict]:
+    def _get_dask(self, prop_names: tuple[str, ...]) -> list[dict]:
         all_delayed: list = []
         # (inst, ordered prop names whose delayed values are in all_delayed)
         structure: list[tuple[AssetInstance, list[str]]] = []
