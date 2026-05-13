@@ -1,0 +1,22 @@
+[
+  {
+    "id": 20, "keys": {"iout": "00001"}, "path": "/data/sim_a/output_00001",
+    "url_path": "sim_a/output_00001", "properties": [],
+    "siblings": {
+      "halo_catalogue": {
+        "id": 30, "keys": {"iout": "00001"}, "path": "/data/sim_a/halos_00001.txt",
+        "url_path": "sim_a/halos_00001.txt", "properties": ["mass"]
+      }
+    }
+  },
+  {
+    "id": 21, "keys": {"iout": "00002"}, "path": "/data/sim_a/output_00002",
+    "url_path": "sim_a/output_00002", "properties": [],
+    "siblings": {
+      "halo_catalogue": {
+        "id": 31, "keys": {"iout": "00002"}, "path": "/data/sim_a/halos_00002.txt",
+        "url_path": "sim_a/halos_00002.txt", "properties": ["mass"]
+      }
+    }
+  }
+]

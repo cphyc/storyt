@@ -1,0 +1,19 @@
+{
+  "tree": {
+    "id": 1, "name": "root", "pattern": null, "is_dynamic": false,
+    "children": [{
+      "id": 2, "name": "simulation", "pattern": null, "is_dynamic": false,
+      "children": [{
+        "id": 3, "name": "output", "pattern": "output_(?P<iout>\\d{5})", "is_dynamic": false,
+        "children": []
+      }]
+    }]
+  },
+  "bindings": [{
+    "id": 1,
+    "members": [
+      {"asset_id": 3, "key_name": "iout"},
+      {"asset_id": 4, "key_name": "iout"}
+    ]
+  }]
+}
