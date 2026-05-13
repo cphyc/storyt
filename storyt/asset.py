@@ -475,13 +475,15 @@ class StaticAsset:
                     )
                     scan_base, pattern = _split_absolute_pattern(resolved)
                     logger.debug("%sregex[%s] template resolved", indent, self.name)
-                except (ValueError, AttributeError):
+                except (ValueError, AttributeError) as e:
                     logger.warning(
                         "%sregex[%s] template resolution failed for parent_id=%d",
                         indent,
                         self.name,
                         parent_db_id,
                     )
+                    for line in str(e).splitlines():
+                        logger.error("%s>  %s", indent, line)
                     return
                 if scan_base is not None:
                     if scan_base.exists() and scan_base.is_dir():
