@@ -286,19 +286,9 @@ def test_processes_scheduler_cache_persists(tmp_path):
         count = session.query(ObjectData).count()
     assert count == 3, f"Expected 3 cached entries in DB, got {count}"
 
-    # Second run (synchronous, identical function → same source hash → cache hit)
-    # Monkey-patch to detect any recomputation
-    recomputed = []
-    original_fn = _iout_val
-
-    def _spy(inst):
-        recomputed.append(inst.keys["iout"])
-        return original_fn(inst)
-
-    # Source hash of _spy differs from _iout_val, so use the same function
+    # Second run (synchronous, identical function)
     rows2 = output.all().get("iout_val")
     assert sorted(r["iout_val"] for r in rows2) == list(range(1, 4))
-    assert recomputed == [], "Main process recomputed already-cached values"
 
 
 def test_processes_scheduler_in_memory_raises(tmp_path):
