@@ -2,6 +2,8 @@
 
 import time
 
+import pytest
+
 import storyt as st
 
 
@@ -118,6 +120,42 @@ def test_discover_is_idempotent(tmp_path):
 
     instances = output.instances()
     assert len(instances) == 1  # not duplicated
+
+
+def test_group_operations_defers_commit_until_exit(tmp_path):
+    (tmp_path / "sim").mkdir()
+
+    root = st.StaticAsset(path=str(tmp_path), name="root")
+    root.add_children(path=["sim"], name="sim")
+
+    with root._db.group_operations():
+        root.discover()
+        inside = root._db.conn.execute(
+            "SELECT COUNT(*) AS n FROM object_instance"
+        ).fetchone()["n"]
+        assert inside == 0
+
+    outside = root._db.conn.execute(
+        "SELECT COUNT(*) AS n FROM object_instance"
+    ).fetchone()["n"]
+    assert outside == 2
+
+
+def test_group_operations_rolls_back_on_error(tmp_path):
+    (tmp_path / "sim").mkdir()
+
+    root = st.StaticAsset(path=str(tmp_path), name="root")
+    root.add_children(path=["sim"], name="sim")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with root._db.group_operations():
+            root.discover()
+            raise RuntimeError("boom")
+
+    rows = root._db.conn.execute(
+        "SELECT COUNT(*) AS n FROM object_instance"
+    ).fetchone()["n"]
+    assert rows == 0
 
 
 def test_regex_subdirectory_pattern(tmp_path):

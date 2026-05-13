@@ -1,5 +1,6 @@
 import hashlib
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import (
@@ -170,6 +171,8 @@ class Database:
         raw_conn = self.engine.connect()
         self.conn = SQLConnectionWrapper(raw_conn)
         Base.metadata.create_all(self.engine)
+        self._group_session: Session | None = None
+        self._group_depth = 0
 
     # ------------------------------------------------------------------
     # Pickle support (required for dask "processes" scheduler)
@@ -189,14 +192,52 @@ class Database:
     def _session(self) -> Session:
         return Session(self.engine)
 
-    def _session(self) -> Session:
-        return Session(self.engine)
+    def _acquire_session(self) -> tuple[Session, bool]:
+        if self._group_session is not None:
+            return self._group_session, False
+        return self._session(), True
+
+    def _release_session(self, session: Session, owns_session: bool) -> None:
+        if owns_session:
+            session.close()
+
+    def _flush_or_commit(self, session: Session, owns_session: bool) -> None:
+        if owns_session:
+            session.commit()
+        else:
+            session.flush()
+
+    @contextmanager
+    def group_operations(self):
+        """Group many DB operations into one transaction.
+
+        Outside this context, each write method keeps the current behavior
+        (commit per call). Inside this context, write methods flush changes
+        and defer commit until exiting the outermost block.
+        """
+        if self._group_session is None:
+            self._group_session = self._session()
+        self._group_depth += 1
+        try:
+            yield self
+            self._group_depth -= 1
+            if self._group_depth == 0 and self._group_session is not None:
+                self._group_session.commit()
+                self._group_session.close()
+                self._group_session = None
+        except Exception:
+            if self._group_session is not None:
+                self._group_session.rollback()
+                self._group_session.close()
+                self._group_session = None
+            self._group_depth = 0
+            raise
 
     def register_asset_type(
         self, name: str, pattern: str | None, is_dynamic: bool, hash_: str
     ) -> int:
 
-        session = self._session()
+        session, owns_session = self._acquire_session()
         try:
             # Try to find existing
             existing = session.query(ObjectStore).filter_by(hash=hash_).first()
@@ -209,20 +250,22 @@ class Database:
             )
             session.add(obj_store)
             try:
-                session.commit()
+                self._flush_or_commit(session, owns_session)
                 return obj_store.id
             except IntegrityError:
+                if not owns_session:
+                    raise
                 session.rollback()
                 existing = session.query(ObjectStore).filter_by(hash=hash_).first()
                 if existing:
                     return existing.id
                 raise
         finally:
-            session.close()
+            self._release_session(session, owns_session)
 
     def register_hierarchy(self, parent_id: int, child_id: int):
 
-        session = self._session()
+        session, owns_session = self._acquire_session()
         try:
             existing = (
                 session.query(ObjectHierarchy)
@@ -235,11 +278,13 @@ class Database:
             hierarchy = ObjectHierarchy(parent_id=parent_id, child_id=child_id)
             session.add(hierarchy)
             try:
-                session.commit()
+                self._flush_or_commit(session, owns_session)
             except IntegrityError:
+                if not owns_session:
+                    raise
                 session.rollback()
         finally:
-            session.close()
+            self._release_session(session, owns_session)
 
     def register_instance(
         self,
@@ -252,7 +297,7 @@ class Database:
         """
         Register an instance. If path is a file/dir, timestamp should be its mtime (int, seconds since epoch).
         """
-        session = self._session()
+        session, owns_session = self._acquire_session()
         try:
             existing = (
                 session.query(ObjectInstance)
@@ -267,7 +312,7 @@ class Database:
                     existing.timestamp is None or existing.timestamp < timestamp
                 ):
                     existing.timestamp = timestamp
-                    session.commit()
+                    self._flush_or_commit(session, owns_session)
                 return existing.id
 
             instance = ObjectInstance(
@@ -279,9 +324,11 @@ class Database:
             )
             session.add(instance)
             try:
-                session.commit()
+                self._flush_or_commit(session, owns_session)
                 return instance.id
             except IntegrityError:
+                if not owns_session:
+                    raise
                 session.rollback()
                 existing = (
                     session.query(ObjectInstance)
@@ -294,13 +341,13 @@ class Database:
                     return existing.id
                 raise
         finally:
-            session.close()
+            self._release_session(session, owns_session)
 
     def register_property(
         self, obj_id: int, name: str, source_hash: str, serializer: str = "pickle"
     ) -> int:
 
-        session = self._session()
+        session, owns_session = self._acquire_session()
         try:
             # Try to find existing (fresh query)
             existing = (
@@ -310,7 +357,7 @@ class Database:
             )
             if existing:
                 existing.hash = source_hash
-                session.commit()
+                self._flush_or_commit(session, owns_session)
                 return existing.id
 
             # Try to insert; if duplicate, update instead
@@ -319,9 +366,11 @@ class Database:
             )
             session.add(prop)
             try:
-                session.commit()
+                self._flush_or_commit(session, owns_session)
                 return prop.id
             except IntegrityError:
+                if not owns_session:
+                    raise
                 # Record was inserted by another process; update it
                 session.rollback()
                 existing = (
@@ -331,16 +380,16 @@ class Database:
                 )
                 if existing:
                     existing.hash = source_hash
-                    session.commit()
+                    self._flush_or_commit(session, owns_session)
                     return existing.id
                 raise
         finally:
-            session.close()
+            self._release_session(session, owns_session)
 
     def get_cached_property(
         self, property_id: int, instance_id: int, current_hash: str
     ) -> bytes | None:
-        session = self._session()
+        session, owns_session = self._acquire_session()
         try:
             row = (
                 session.query(ObjectData)
@@ -351,13 +400,13 @@ class Database:
                 return None
             return row.data
         finally:
-            session.close()
+            self._release_session(session, owns_session)
 
     def set_cached_property(
         self, property_id: int, instance_id: int, data: bytes, hash_: str
     ):
 
-        session = self._session()
+        session, owns_session = self._acquire_session()
         try:
             existing = (
                 session.query(ObjectData)
@@ -367,7 +416,7 @@ class Database:
             if existing:
                 existing.property_hash = hash_
                 existing.data = data
-                session.commit()
+                self._flush_or_commit(session, owns_session)
             else:
                 obj_data = ObjectData(
                     obj_property_id=property_id,
@@ -377,8 +426,10 @@ class Database:
                 )
                 session.add(obj_data)
                 try:
-                    session.commit()
+                    self._flush_or_commit(session, owns_session)
                 except IntegrityError:
+                    if not owns_session:
+                        raise
                     session.rollback()
                     existing = (
                         session.query(ObjectData)
@@ -390,13 +441,13 @@ class Database:
                     if existing:
                         existing.property_hash = hash_
                         existing.data = data
-                        session.commit()
+                        self._flush_or_commit(session, owns_session)
         finally:
-            session.close()
+            self._release_session(session, owns_session)
 
     def register_property_dep(self, property_id: int, depends_on_id: int):
 
-        session = self._session()
+        session, owns_session = self._acquire_session()
         try:
             existing = (
                 session.query(ObjectPropertyDep)
@@ -411,14 +462,16 @@ class Database:
             )
             session.add(dep)
             try:
-                session.commit()
+                self._flush_or_commit(session, owns_session)
             except IntegrityError:
+                if not owns_session:
+                    raise
                 session.rollback()
         finally:
-            session.close()
+            self._release_session(session, owns_session)
 
     def get_property_dep_ids(self, property_id: int) -> list[int]:
-        session = self._session()
+        session, owns_session = self._acquire_session()
         try:
             rows = (
                 session.query(ObjectPropertyDep)
@@ -427,12 +480,12 @@ class Database:
             )
             return [r.depends_on_id for r in rows]
         finally:
-            session.close()
+            self._release_session(session, owns_session)
 
     def get_child_instances(
         self, parent_instance_id: int, child_object_id: int
     ) -> list[dict]:
-        session = self._session()
+        session, owns_session = self._acquire_session()
         try:
             rows = (
                 session.query(ObjectInstance)
@@ -450,10 +503,10 @@ class Database:
                 for r in rows
             ]
         finally:
-            session.close()
+            self._release_session(session, owns_session)
 
     def get_instances(self, object_id: int, key_filters: dict) -> list[dict]:
-        session = self._session()
+        session, owns_session = self._acquire_session()
         try:
             rows = session.query(ObjectInstance).filter_by(object_id=object_id).all()
             result = []
@@ -470,12 +523,12 @@ class Database:
                     )
             return result
         finally:
-            session.close()
+            self._release_session(session, owns_session)
 
     def get_bound_instances(
         self, instance_id: int, target_object_id: int
     ) -> list[dict]:
-        session = self._session()
+        session, owns_session = self._acquire_session()
         try:
             inst = session.query(ObjectInstance).filter_by(id=instance_id).first()
             if inst is None:
@@ -526,7 +579,7 @@ class Database:
 
             return result
         finally:
-            session.close()
+            self._release_session(session, owns_session)
 
     def register_binding(self, members: list[tuple]) -> int:
         """Register a binding. members is [(object_store_id, key_name), ...]."""
@@ -535,7 +588,7 @@ class Database:
             json.dumps(sorted(members), sort_keys=True).encode()
         ).hexdigest()
 
-        session = self._session()
+        session, owns_session = self._acquire_session()
         try:
             existing = session.query(ObjectBinding).filter_by(signature=sig).first()
             if existing:
@@ -554,13 +607,15 @@ class Database:
                 session.add(member)
 
             try:
-                session.commit()
+                self._flush_or_commit(session, owns_session)
                 return binding.id
             except IntegrityError:
+                if not owns_session:
+                    raise
                 session.rollback()
                 existing = session.query(ObjectBinding).filter_by(signature=sig).first()
                 if existing:
                     return existing.id
                 raise
         finally:
-            session.close()
+            self._release_session(session, owns_session)
