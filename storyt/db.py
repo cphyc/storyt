@@ -99,6 +99,9 @@ class ObjectInstance(Base):
     path = Column(String, nullable=True)
     keys = Column(JSON, nullable=False, default={})
     parent_id = Column(Integer, ForeignKey("object_instance.id"), nullable=True)
+    timestamp = Column(
+        Integer, nullable=True
+    )  # Unix mtime of the file/dir at registration
 
     asset = relationship("ObjectStore", back_populates="instances")
     data = relationship("ObjectData", back_populates="instance")
@@ -244,8 +247,11 @@ class Database:
         path: str | None,
         keys: dict,
         parent_id: int | None,
+        timestamp: int | None = None,
     ) -> int:
-
+        """
+        Register an instance. If path is a file/dir, timestamp should be its mtime (int, seconds since epoch).
+        """
         session = self._session()
         try:
             existing = (
@@ -256,10 +262,20 @@ class Database:
                 .first()
             )
             if existing:
+                # Optionally update timestamp if newer
+                if timestamp is not None and (
+                    existing.timestamp is None or existing.timestamp < timestamp
+                ):
+                    existing.timestamp = timestamp
+                    session.commit()
                 return existing.id
 
             instance = ObjectInstance(
-                object_id=object_id, path=path, keys=keys, parent_id=parent_id
+                object_id=object_id,
+                path=path,
+                keys=keys,
+                parent_id=parent_id,
+                timestamp=timestamp,
             )
             session.add(instance)
             try:
