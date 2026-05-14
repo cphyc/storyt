@@ -116,17 +116,17 @@ Open <http://localhost:8080>.
 
 ## Demo
 
-A full worked example with a mock simulation is in `tmp/build_demo.py`:
+A full worked example with a mock simulation is in `example/build_demo.py`:
 
 ```bash
 # activate venv first
 source .venv/bin/activate
 
 # build the demo site (builds frontend automatically if dist/ is missing)
-python tmp/build_demo.py
+python example/build_demo.py
 
 # serve
-cd tmp/site && python -m http.server 8080
+cd example/site && python -m http.server 8080
 ```
 
 ---
