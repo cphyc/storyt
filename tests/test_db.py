@@ -1,5 +1,6 @@
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 
 import storyt as st
 
@@ -29,9 +30,22 @@ def test_concept(story):
 def test_resource(story):
     with story.record() as r:
         root = r.Concept(name="test_resource")
+        subfolder = root.add_child("subfolder")
+
         r1 = root.add_resource("resource1", lambda x: x)
         r2 = root.add_resource("resource2", "glob:*.txt")
         r3 = root.add_resource("resource3", r"re:.*\.txt")
+
+    # Can't add a resource with the same name and same concept
+    with pytest.raises(IntegrityError):
+        with story.record() as r:
+            # Duplicate!
+            root.add_resource("resource1", lambda x: x)
+
+    with story.record() as r:
+        # But we can add a resource with the same name and
+        # a different concept
+        subfolder.add_resource("resource1", lambda x: x)
 
     # Those should work
     for r, k in zip(

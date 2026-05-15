@@ -8,7 +8,7 @@ from functools import wraps
 from textwrap import indent
 from typing import Any, Optional
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, UniqueConstraint
 from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
@@ -135,7 +135,7 @@ class Resource(Base):
     __tablename__ = "resource"
 
     id: Mapped[int] = mapped_column(init=False, primary_key=True)
-    name: Mapped[str] = mapped_column(unique=True)
+    name: Mapped[str]
     source_code: Mapped[str]
     hash: Mapped[str] = mapped_column(init=False)
     kind: Mapped[ResourceKind]
@@ -160,6 +160,9 @@ class Resource(Base):
     products: Mapped[list["Product"]] = relationship(
         "Product", back_populates="resource", default_factory=list
     )
+
+    # Unique constraint to ensure that a concept cannot have two resources with the same name
+    __table_args__ = (UniqueConstraint("name", "concept_id"),)
 
     def __post_init__(self):
         self.hash = hashlib.md5(self.source_code.encode()).hexdigest()
