@@ -1,12 +1,11 @@
 import hashlib
 import inspect
-import typing
 from collections.abc import Callable
 from datetime import datetime
-from enum import Enum
 from functools import wraps
+from pathlib import Path
 from textwrap import indent
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from sqlalchemy import ForeignKey, UniqueConstraint
 from sqlalchemy.orm import (
@@ -15,13 +14,14 @@ from sqlalchemy.orm import (
     MappedAsDataclass,
     mapped_column,
     relationship,
+    validates,
 )
 from sqlalchemy.sql import func
 from sqlalchemy.types import PickleType
 
-from storyt.types import CloudPickleType
+from storyt.types import CloudPickleType, ConceptResource, ResourceKind
 
-if typing.TYPE_CHECKING:
+if TYPE_CHECKING:
     from storyt.story import Recorder
 
 
@@ -69,22 +69,17 @@ class Concept(Base):
         child = self.recorder.Concept(name=name, parent=self)
         return child
 
-    def add_resource(self, name: str, operation):
-        match operation:
-            case _ if callable(operation):
-                source_code = inspect.getsource(operation)
-                kind = ResourceKind.FUNCTION
-            case _ if isinstance(operation, str) and operation.startswith("glob:"):
-                source_code = operation.split("glob:")[1]
-                kind = ResourceKind.GLOB
-            case _ if isinstance(operation, str) and operation.startswith("re:"):
-                source_code = operation.split("re:")[1]
-                kind = ResourceKind.RE
-            case _:
-                raise NotImplementedError(f"Unsupported operation type: {operation}")
+    def add_resource(self, name: str, path: Path):
+        """Add a resource associated to this concept.
+
+        Note
+        ----
+        The number of items will determine the number of
+        instances of this resource.
+        """
 
         resource = self.recorder.Resource(
-            name=name, concept=self, source_code=source_code, kind=kind
+            name=name, concept=self, source_code=str(path), kind=ResourceKind.PATH
         )
         return resource
 
@@ -123,12 +118,6 @@ class ConceptInstance(Base):
         return f"<ConceptInstance '{self.name}' concept={self.concept.name}>"
 
 
-class ResourceKind(Enum):
-    RE = "re"
-    GLOB = "glob"
-    FUNCTION = "function"
-
-
 class Resource(Base):
     """Represents a resource associated to a concept."""
 
@@ -161,14 +150,27 @@ class Resource(Base):
         "Product", back_populates="resource", default_factory=list
     )
 
-    # Unique constraint to ensure that a concept cannot have two resources with the same name
+    # Constaints:
+    # - resource name & concept are unique
+    # - concept.parent == parent.concept (if parent is not None)
     __table_args__ = (UniqueConstraint("name", "concept_id"),)
 
     def __post_init__(self):
         self.hash = hashlib.md5(self.source_code.encode()).hexdigest()
 
     def __repr__(self) -> str:
-        return f"<Resource '{self.name}' kind={self.kind.value} | concept={self.concept.name}>"
+        return f"<Resource '{self.name}' kind={self.kind.value} | concept={self.concept.name} | parent={self.parent.name} >"
+
+    @validates("parent_id", "concept_id")
+    def validate_concept_hierarchy(self, key, value):
+        if self.parent and self.concept:
+            parent_concept = self.parent.concept
+            if parent_concept.id != self.concept.parent_id:
+                raise ValueError(
+                    f"resource.parent.concept ({parent_concept}) must equal "
+                    f"resource.concept.parent ({self.concept.parent})"
+                )
+        return value
 
     def add_product(self, name: str | None = None):
         """Register a product of this resource."""
@@ -188,6 +190,20 @@ class Resource(Base):
             return product
 
         return wrapper
+
+    def __gt__(self, concept: "Concept") -> "ConceptResource":
+        """Syntactic sugar for creating a new resource that is the
+         child of this one and associated to concept
+        to a concept."""
+        return ConceptResource(
+            concept=concept,
+            resource=self,
+            recorder=self.recorder,
+        )
+
+    def discover(self):
+        """Discover instances of oneself"""
+        ...
 
 
 class ResourceInstance(Base):

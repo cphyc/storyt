@@ -32,36 +32,42 @@ def test_resource(story):
         root = r.Concept(name="test_resource")
         subfolder = root.add_child("subfolder")
 
-        r1 = root.add_resource("resource1", lambda x: x)
-        r2 = root.add_resource("resource2", "glob:*.txt")
-        r3 = root.add_resource("resource3", r"re:.*\.txt")
+        r1 = root.add_resource("resource1", "/foo")
+        r2 = root.add_resource("resource2", "/bar")
+
+        r3 = (r1 > subfolder).glob("*", name="glob_resource")
+        r4 = (r2 > subfolder).re("*", name="re_resource")
 
     # Can't add a resource with the same name and same concept
     with pytest.raises(IntegrityError):
         with story.record() as r:
             # Duplicate!
-            root.add_resource("resource1", lambda x: x)
-
-    with story.record() as r:
-        # But we can add a resource with the same name and
-        # a different concept
-        subfolder.add_resource("resource1", lambda x: x)
+            root.add_resource("resource1", "/foobar")
 
     # Those should work
     for r, k in zip(
-        (r1, r2, r3),
-        (st.db.ResourceKind.FUNCTION, st.db.ResourceKind.GLOB, st.db.ResourceKind.RE),
+        (r1, r2),
+        (st.db.ResourceKind.PATH, st.db.ResourceKind.PATH),
         strict=True,
     ):
         assert r.concept == root
         assert r.source_code is not None
         assert r.kind is k
 
+    assert r3.kind == st.types.ResourceKind.GLOB
+    assert r3.parent == r1
+    assert r3.concept == subfolder
+
+    assert r4.kind == st.types.ResourceKind.RE
+    assert r4.parent == r2
+    assert r4.concept == subfolder
+
 
 def test_product(story):
+
     with story.record() as r:
         root = r.Concept(name="test_product")
-        resource = root.add_resource("resource1", lambda x: x)
+        resource = root.add_resource("resource1", "/foo")
 
         @resource.add_product("times2")
         def times2(x):

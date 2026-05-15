@@ -6,7 +6,7 @@ import storyt as st
 
 @pytest.fixture
 def story():
-    engine = create_engine("sqlite:///:memory:")
+    engine = create_engine("sqlite:///:memory:", echo=True)
     st.db.Base.metadata.create_all(engine)
     story = st.Story(engine)
     yield story
@@ -50,6 +50,10 @@ def test_indexing(story, file_hierarchy):
         halo = output.add_child("halo")
 
         # Resources
-        sim.add_resource("folder", "glob:simulation_*/")
-        output.add_resource("folder", "glob:output_*/")
-        halo.add_resource("file", "glob:halos_*.csv")
+        sim_folder = sim.add_resource("folder", file_hierarchy)
+
+        output_folder = (sim_folder > output).glob("output_*", name="output_folder")
+
+        halo_files = (output_folder > halo).glob("halos_*.csv")
+
+        halo_files.discover()
