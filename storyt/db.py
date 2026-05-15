@@ -1,5 +1,6 @@
 import hashlib
 import inspect
+import typing
 from collections.abc import Callable
 from datetime import datetime
 from enum import Enum
@@ -18,6 +19,11 @@ from sqlalchemy.orm import (
 from sqlalchemy.sql import func
 from sqlalchemy.types import PickleType
 
+from storyt.types import CloudPickleType
+
+if typing.TYPE_CHECKING:
+    from storyt.story import Recorder
+
 
 class Base(MappedAsDataclass, DeclarativeBase):
     pass
@@ -31,6 +37,9 @@ class Concept(Base):
 
     id: Mapped[int] = mapped_column(init=False, primary_key=True)
     name: Mapped[str] = mapped_column(unique=True)
+
+    recorder: "Recorder"
+
     timestamp: Mapped[datetime] = mapped_column(insert_default=func.now(), default=None)
 
     # Relations
@@ -57,7 +66,7 @@ class Concept(Base):
             return f"<Concept '{self.name}' ROOT>"
 
     def add_child(self, name: str):
-        child = Concept(name=name, parent=self)
+        child = self.recorder.Concept(name=name, parent=self)
         return child
 
     def add_resource(self, name: str, operation):
@@ -74,7 +83,9 @@ class Concept(Base):
             case _:
                 raise NotImplementedError(f"Unsupported operation type: {operation}")
 
-        resource = Resource(name=name, concept=self, source_code=source_code, kind=kind)
+        resource = self.recorder.Resource(
+            name=name, concept=self, source_code=source_code, kind=kind
+        )
         return resource
 
 
@@ -88,6 +99,8 @@ class ConceptInstance(Base):
     name: Mapped[str] = mapped_column(unique=True)
 
     concept: Mapped["Concept"] = relationship("Concept", back_populates="instances")
+
+    recorder: "Recorder"
 
     # Relations
     parent_id: Mapped[int | None] = mapped_column(
@@ -127,6 +140,8 @@ class Resource(Base):
     hash: Mapped[str] = mapped_column(init=False)
     kind: Mapped[ResourceKind]
 
+    recorder: "Recorder"
+
     # Relations
     concept: Mapped["Concept"] = relationship("Concept", back_populates="resources")
     concept_id: Mapped[int] = mapped_column(ForeignKey("concept.id"), default=None)
@@ -165,11 +180,7 @@ class Resource(Base):
             def inner(*args, **kwargs):
                 return func(*args, **kwargs)
 
-            product = Product(
-                name=name_,
-                resource=self,
-                func=inner,
-            )
+            product = self.recorder.Product(name=name_, resource=self, function=inner)
 
             return product
 
@@ -186,6 +197,8 @@ class ResourceInstance(Base):
     resource_id: Mapped[int] = mapped_column(ForeignKey("resource.id"))
     concept_instance_id: Mapped[int] = mapped_column(ForeignKey("concept_instance.id"))
     path: Mapped[str]
+
+    recorder: "Recorder"
 
     # Relations
     resource: Mapped["Resource"] = relationship("Resource", back_populates="instances")
@@ -221,9 +234,11 @@ class Product(Base):
 
     id: Mapped[int] = mapped_column(init=False, primary_key=True)
     name: Mapped[str] = mapped_column(unique=True)
-    func: Callable
+    function: Mapped[Callable] = mapped_column(CloudPickleType)
     hash: Mapped[str] = mapped_column(init=False)
     resource: Mapped["Resource"] = relationship("Resource", back_populates="products")
+
+    recorder: "Recorder"
 
     resource_id: Mapped[int] = mapped_column(ForeignKey("resource.id"), default=None)
     instances: Mapped[list["ProductInstance"]] = relationship(
@@ -233,7 +248,7 @@ class Product(Base):
     timestamp: Mapped[datetime] = mapped_column(insert_default=func.now(), default=None)
 
     def __post_init__(self):
-        self.source_code = inspect.getsource(self.func)
+        self.source_code = inspect.getsource(self.function)
         self.hash = hashlib.md5(self.source_code.encode()).hexdigest()
 
     def __repr__(self) -> str:
@@ -243,7 +258,7 @@ class Product(Base):
         return ret
 
     def __call__(self, *args, **kwargs):
-        return self.func(*args, **kwargs)
+        return self.function(*args, **kwargs)
 
 
 class ProductInstance(Base):
@@ -258,6 +273,8 @@ class ProductInstance(Base):
         ForeignKey("resource_instance.id")
     )
     content: Mapped[Any] = mapped_column(PickleType)
+
+    recorder: "Recorder"
 
     product: Mapped["Product"] = relationship("Product", back_populates="instances")
     resource_instance: Mapped["ResourceInstance"] = relationship(
