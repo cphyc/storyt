@@ -57,3 +57,7 @@ def test_indexing(story, file_hierarchy):
         halo_files = (output_folder > halo).glob("halos_*.csv")
 
         halo_files.discover()
+
+        with pytest.raises(ValueError):
+            # Because a simulation cannot have a halo directly
+            _ = sim_folder > halo

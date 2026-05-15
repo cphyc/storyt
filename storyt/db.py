@@ -14,7 +14,6 @@ from sqlalchemy.orm import (
     MappedAsDataclass,
     mapped_column,
     relationship,
-    validates,
 )
 from sqlalchemy.sql import func
 from sqlalchemy.types import PickleType
@@ -160,17 +159,6 @@ class Resource(Base):
 
     def __repr__(self) -> str:
         return f"<Resource '{self.name}' kind={self.kind.value} | concept={self.concept.name} | parent={self.parent.name} >"
-
-    @validates("parent_id", "concept_id")
-    def validate_concept_hierarchy(self, key, value):
-        if self.parent and self.concept:
-            parent_concept = self.parent.concept
-            if parent_concept.id != self.concept.parent_id:
-                raise ValueError(
-                    f"resource.parent.concept ({parent_concept}) must equal "
-                    f"resource.concept.parent ({self.concept.parent})"
-                )
-        return value
 
     def add_product(self, name: str | None = None):
         """Register a product of this resource."""

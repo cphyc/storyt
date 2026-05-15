@@ -41,6 +41,12 @@ class ConceptResource:
     resource: "Resource"
     recorder: "Recorder"
 
+    def __post_init__(self):
+        if self.resource.concept != self.concept.parent:
+            raise ValueError(
+                f"Resource '{self.resource.name}' is not a child of concept '{self.concept.name}'"
+            )
+
     def glob(self, pattern: str, *, name: str | None = None):
         name = name or pattern
         return self.recorder.Resource(
